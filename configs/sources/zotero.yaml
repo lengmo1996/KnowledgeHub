@@ -1,0 +1,30 @@
+# Example explicit Zotero source configuration. Do not put API keys in this
+# repository; provide ZOTERO_API_KEY through the process environment.
+api_base_url: https://api.zotero.org
+library_type: user
+# Required for group libraries. May be null for a user library.
+library_id: null
+
+# This source directory is always opened read-only by KnowledgeHub.
+webdav_dir: /data/Nutstore/zotero
+# SQLite, extracted PDFs, manifests, runs, and logs are written only here.
+data_dir: /data/KnowledgeHub/zotero
+
+http_timeout_seconds: 30
+max_retries: 5
+sync_max_retries: 3
+api_concurrency: 2
+
+zip_stability_interval_seconds: 10
+zip_stability_check_count: 2
+mapping_validation_sample_size: 20
+# On a metadata 304, retry unresolved attachments and archives whose stat data
+# changed. `resolve-attachments` always performs an explicit local rescan.
+attachment_scan_on_304: true
+# Metadata-only changes do not require rechunking unless this is enabled.
+metadata_changes_require_chunking: false
+
+# Streaming is not implemented in v1. Poll with systemd or `watch` instead.
+enable_streaming: false
+poll_interval_seconds: 300
+log_level: INFO

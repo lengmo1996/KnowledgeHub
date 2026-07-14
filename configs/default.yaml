@@ -1,0 +1,20 @@
+# Non-secret defaults. Environment variables override these values.
+sources:
+  zotero:
+    api_base_url: https://api.zotero.org
+    library_type: user
+    library_id: null
+    webdav_dir: /data/Nutstore/zotero
+    data_dir: /data/KnowledgeHub/zotero
+    http_timeout_seconds: 30
+    max_retries: 5
+    sync_max_retries: 3
+    api_concurrency: 2
+    zip_stability_interval_seconds: 10
+    zip_stability_check_count: 2
+    mapping_validation_sample_size: 20
+    attachment_scan_on_304: true
+    metadata_changes_require_chunking: false
+    enable_streaming: false
+    poll_interval_seconds: 300
+    log_level: INFO

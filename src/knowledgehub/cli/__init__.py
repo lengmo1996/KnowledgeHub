@@ -1,0 +1,1 @@
+"""KnowledgeHub command-line interface."""

@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Virtual environments and local secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+
+# KnowledgeHub runtime state must stay outside the repository.
+/data/
+/state/
+/raw/
+/extracted/
+/manifests/
+/runs/
+/logs/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.log
+
+# Zotero/WebDAV and extracted binary payloads are never source artifacts.
+*.zip
+*.prop
+*.pdf
+

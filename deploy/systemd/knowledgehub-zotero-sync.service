@@ -1,0 +1,37 @@
+[Unit]
+Description=KnowledgeHub Zotero incremental sync
+Documentation=file:///opt/knowledgehub/docs/sources/zotero.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathIsDirectory=/data/Nutstore/zotero
+
+[Service]
+Type=oneshot
+User=knowledgehub
+Group=knowledgehub
+WorkingDirectory=/opt/knowledgehub
+EnvironmentFile=/etc/knowledgehub/zotero.env
+ExecStart=/opt/knowledgehub/.venv/bin/knowledgehub --config /etc/knowledgehub/zotero.yaml zotero sync --once
+TimeoutStartSec=30min
+UMask=0077
+
+# The WebDAV mirror is an immutable input; all writes are confined to DATA_DIR.
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/data/Nutstore/zotero
+ReadWritePaths=/data/KnowledgeHub/zotero
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+# stdout/stderr, including the structured run summary, remain in the journal.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=knowledgehub-zotero-sync
