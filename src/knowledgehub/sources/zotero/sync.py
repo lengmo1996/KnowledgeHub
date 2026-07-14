@@ -80,10 +80,24 @@ def resolve_attachments_once(
     config: ZoteroConfig,
     *,
     dependencies: RuntimeDependencies | None = None,
+    limit: int | None = None,
+    attachment_keys: Sequence[str] | None = None,
 ) -> SyncSummary:
     """Rescan local archives without contacting Zotero or changing library_version."""
 
-    return _run(config, mode=SyncMode.ATTACHMENTS, dependencies=dependencies, remote=False)
+    if limit is not None and limit < 1:
+        raise ZoteroError("config_error", "Attachment scan limit must be at least 1")
+    normalized_keys = tuple(dict.fromkeys(str(key).strip() for key in attachment_keys or ()))
+    if any(not key or not _SAFE_COMPONENT.fullmatch(key) for key in normalized_keys):
+        raise ZoteroError("config_error", "Attachment keys contain an invalid value")
+    return _run(
+        config,
+        mode=SyncMode.ATTACHMENTS,
+        dependencies=dependencies,
+        remote=False,
+        attachment_limit=limit,
+        attachment_keys=normalized_keys or None,
+    )
 
 
 def _run(
@@ -92,6 +106,8 @@ def _run(
     mode: SyncMode,
     dependencies: RuntimeDependencies | None,
     remote: bool,
+    attachment_limit: int | None = None,
+    attachment_keys: Sequence[str] | None = None,
 ) -> SyncSummary:
     deps = dependencies or RuntimeDependencies()
     sleeper = deps.sleeper or time.sleep
@@ -111,6 +127,12 @@ def _run(
         sleeper=sleeper,
     ):
         recover_publications(config.data_dir, store)
+        abandoned = store.fail_incomplete_runs()
+        if abandoned:
+            LOGGER.warning(
+                "closed incomplete Zotero runs after acquiring the source lock",
+                extra={"abandoned_sync_ids": abandoned},
+            )
         initial_state = store.library_state()
         from_version = int(initial_state["library_version"]) if initial_state else 0
         summary = SyncSummary(
@@ -192,6 +214,8 @@ def _run(
                                 client=client,
                                 sleeper=sleeper,
                                 elapsed=lambda: max(0.0, monotonic() - started),
+                                attachment_limit=attachment_limit,
+                                attachment_keys=attachment_keys,
                             )
                     else:
                         changes = _RemoteChanges(
@@ -209,6 +233,8 @@ def _run(
                             client=None,
                             sleeper=sleeper,
                             elapsed=lambda: max(0.0, monotonic() - started),
+                            attachment_limit=attachment_limit,
+                            attachment_keys=attachment_keys,
                         )
                     return summary
                 except RemoteVersionChanged as exc:
@@ -334,6 +360,8 @@ def _apply_and_publish(
     client: ZoteroClient | None,
     sleeper: Callable[[float], None],
     elapsed: Callable[[], float],
+    attachment_limit: int | None = None,
+    attachment_keys: Sequence[str] | None = None,
 ) -> None:
     summary.target_version = changes.target_version
     summary.unchanged = changes.unchanged
@@ -357,6 +385,8 @@ def _apply_and_publish(
                 summary,
                 sleeper=sleeper,
                 scan_policy=attachment_scan_policy,
+                limit=attachment_limit,
+                attachment_keys=attachment_keys,
             )
             if client is not None:
                 client.ensure_target_unchanged(changes.target_version)
@@ -576,6 +606,8 @@ def _resolve_attachments(
     *,
     sleeper: Callable[[float], None],
     scan_policy: str,
+    limit: int | None = None,
+    attachment_keys: Sequence[str] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
     if scan_policy not in {"all", "changed", "none"}:
         raise ValueError(f"unknown attachment scan policy: {scan_policy}")
@@ -623,12 +655,22 @@ def _resolve_attachments(
         elif mime.lower() == "application/pdf":
             projection["resolver_error"] = f"unsupported linkMode: {link_mode or '<empty>'}"
 
+    selected_requests = _select_attachment_requests(
+        all_requests,
+        attachment_keys=attachment_keys,
+        limit=limit,
+    )
+    selected_keys = {request.attachment_key for request in selected_requests}
     requests: list[AttachmentRequest] = []
     for request in all_requests:
         previous_row = previous.get(request.attachment_key)
-        should_scan = scan_policy == "all" or (
-            scan_policy == "changed"
-            and _attachment_needs_scan(config.webdav_dir, request.attachment_key, previous_row)
+        selected = request.attachment_key in selected_keys
+        should_scan = selected and (
+            scan_policy == "all"
+            or (
+                scan_policy == "changed"
+                and _attachment_needs_scan(config.webdav_dir, request.attachment_key, previous_row)
+            )
         )
         if should_scan:
             requests.append(request)
@@ -650,7 +692,7 @@ def _resolve_attachments(
         # Changing the library or WebDAV realpath is a trust-boundary event and
         # always forces fresh mapping validation, even when ordinary 304 scans
         # are disabled.
-        requests = list(all_requests)
+        requests = list(selected_requests)
     if requests and not mapping_valid:
         validation = validate_attachment_mapping(
             config.webdav_dir,
@@ -760,6 +802,29 @@ def _resolve_attachments(
             summary.attachments_error += 1
     store.retain_attachment_projections(connection, list(projections))
     return store.load_attachments(connection), staged_publications
+
+
+def _select_attachment_requests(
+    requests: Sequence[AttachmentRequest],
+    *,
+    attachment_keys: Sequence[str] | None,
+    limit: int | None,
+) -> list[AttachmentRequest]:
+    selected = list(requests)
+    if attachment_keys:
+        wanted = set(attachment_keys)
+        available = {request.attachment_key for request in requests}
+        missing = sorted(wanted - available)
+        if missing:
+            raise ZoteroError(
+                "attachment_not_found",
+                "Requested attachment key is not an eligible PDF attachment",
+                context={"attachment_keys": missing},
+            )
+        selected = [request for request in selected if request.attachment_key in wanted]
+    if limit is not None:
+        selected = selected[:limit]
+    return selected
 
 
 _RESOLUTION_FIELDS = (
@@ -1083,11 +1148,10 @@ def _allowed_publication_target(relative: Path, sync_id: str) -> bool:
 
 def recover_publications(data_dir: Path, store: ZoteroStateStore) -> None:
     runs = data_dir / "runs"
-    if not runs.exists():
-        return
     state = store.library_state()
     active_sync_id = state.get("active_sync_id") if state else None
-    for intent_path in sorted(runs.glob("*/publish-intent.json")):
+    intent_paths = sorted(runs.glob("*/publish-intent.json")) if runs.exists() else []
+    for intent_path in intent_paths:
         try:
             payload = json.loads(intent_path.read_text(encoding="utf-8"))
             entries = payload["entries"]
@@ -1116,6 +1180,10 @@ def recover_publications(data_dir: Path, store: ZoteroStateStore) -> None:
             raise ZoteroError(
                 "recovery_error", f"Cannot recover publication intent: {intent_path}"
             ) from exc
+    staging_root = data_dir / ".staging"
+    if staging_root.exists():
+        for orphan in sorted(staging_root.iterdir()):
+            safe_remove(orphan, root=data_dir)
 
 
 def _write_run_summary(data_dir: Path, summary: SyncSummary) -> None:

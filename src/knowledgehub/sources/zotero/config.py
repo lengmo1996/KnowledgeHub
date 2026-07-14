@@ -43,7 +43,7 @@ class ZoteroConfig:
     library_type: str = "user"
     library_id: int | None = None
     api_base_url: str = "https://api.zotero.org"
-    webdav_dir: Path = Path("/data/Nutstore/zotero")
+    webdav_dir: Path = Path("/data/KnowledgeHub/zotero_cache")
     data_dir: Path = Path("/data/KnowledgeHub/zotero")
     http_timeout_seconds: float = 30.0
     max_retries: int = 5
@@ -161,7 +161,13 @@ class ZoteroConfig:
 
     def prepare_runtime(self) -> None:
         webdav = self.webdav_dir.expanduser()
-        if not webdav.is_dir() or not os.access(webdav, os.R_OK | os.X_OK):
+        try:
+            webdav_readable = webdav.is_dir() and os.access(webdav, os.R_OK | os.X_OK)
+        except OSError as exc:
+            raise ZoteroError(
+                "config_error", f"WebDAV directory cannot be accessed: {webdav}"
+            ) from exc
+        if not webdav_readable:
             raise ZoteroError("config_error", f"WebDAV directory is not readable: {webdav}")
         data = self.data_dir.expanduser()
         try:

@@ -360,10 +360,16 @@ class ZoteroClient:
 
     def _validate_pagination_links(self, response: httpx.Response) -> None:
         try:
-            links = response.links.values()
+            links = response.links.items()
         except (KeyError, ValueError) as exc:
             raise ZoteroError("invalid_response", "Invalid Zotero Link header") from exc
-        for link in links:
+        for relation, link in links:
+            # Zotero legitimately emits a cross-origin ``alternate`` link to
+            # the human-facing www.zotero.org item page.  Only navigation
+            # relations can influence API pagination and therefore need the
+            # same-origin restriction.
+            if (relation or "").lower() not in {"next", "prev", "first", "last"}:
+                continue
             raw_url = link.get("url")
             if not raw_url:
                 continue

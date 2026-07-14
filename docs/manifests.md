@@ -11,6 +11,7 @@ The source publishes:
 ├── documents.jsonl               # current document snapshot
 ├── collections.json              # current normalized collection hierarchy
 ├── summary.json                  # current publication summary
+├── delta-catalog.jsonl           # ordered delta integrity control plane
 └── deltas/<sync_id>.jsonl        # explicit operations for one successful run
 <data_dir>/runs/<sync_id>/summary.json
 ```
@@ -18,6 +19,14 @@ The source publishes:
 All files are UTF-8. JSON uses canonical key ordering and fixed separators;
 arrays with set semantics are normalized before serialization. JSONL records
 are ordered by `document_id` and every line is independently valid JSON.
+
+The delta catalog is published for every successful run, including metadata
+304 runs with an empty delta. Each entry contains a monotonic sequence,
+predecessor sync ID, source versions, relative path, SHA-256 and row count.
+Incremental consumers validate the entire chain and never infer ordering from
+filenames or mtimes. A missing entry, changed hash, predecessor mismatch or
+version gap requires snapshot reconciliation. This is control-plane metadata
+for the existing delta contract, not a second document manifest.
 Candidate files are flushed, fsynced, and atomically published. Consumers
 therefore see the previous complete file or the new complete file, never a
 partially written snapshot/delta.
@@ -84,8 +93,8 @@ Orphan attachments are validation errors.
   "mime_type": "application/pdf",
   "attachment": {
     "backend": "nutstore_webdav",
-    "archive_path": "/data/Nutstore/zotero/ABC123.zip",
-    "prop_path": "/data/Nutstore/zotero/ABC123.prop",
+    "archive_path": "/data/KnowledgeHub/zotero_cache/ABC123.zip",
+    "prop_path": "/data/KnowledgeHub/zotero_cache/ABC123.prop",
     "prop_exists": true,
     "archive_sha256": "<sha256>",
     "archive_size_bytes": 123456,

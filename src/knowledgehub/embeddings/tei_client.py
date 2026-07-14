@@ -1,4 +1,4 @@
-"""HTTP client for Text Embeddings Inference with MRL projection."""
+"""Bounded, validated client for Text Embeddings Inference."""
 
 from __future__ import annotations
 
@@ -11,13 +11,17 @@ import httpx
 from knowledgehub.embeddings.models import EmbeddingBatchResult
 
 
+class EmbeddingServiceError(RuntimeError):
+    pass
+
+
 class TEIClient:
     def __init__(
         self,
         endpoint: str,
         *,
         output_dim: int,
-        normalize: bool,
+        normalize: bool = True,
         timeout_seconds: float = 120.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
@@ -36,43 +40,46 @@ class TEIClient:
 
     def health(self) -> bool:
         try:
-            return self._client.get("/health").status_code == 200
+            response = self._client.get("/health")
+            return response.status_code == 200
         except httpx.HTTPError:
             return False
 
     def embed(self, texts: Sequence[str]) -> EmbeddingBatchResult:
-        if not texts or any(not value.strip() for value in texts):
-            raise ValueError("embedding inputs must contain non-empty text")
+        if not texts or any(not isinstance(value, str) or not value for value in texts):
+            raise ValueError("embedding batch must contain non-empty strings")
         started = time.monotonic()
-        response = self._client.post("/embed", json={"inputs": list(texts), "truncate": True})
-        response.raise_for_status()
-        payload: Any = response.json()
+        try:
+            response = self._client.post("/embed", json={"inputs": list(texts), "truncate": True})
+            response.raise_for_status()
+            payload: Any = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise EmbeddingServiceError(f"TEI request failed for {self.endpoint}: {exc}") from exc
         if not isinstance(payload, list) or len(payload) != len(texts):
-            raise RuntimeError("TEI returned an unexpected batch shape")
+            raise EmbeddingServiceError("TEI returned an unexpected batch shape")
         vectors: list[tuple[float, ...]] = []
         raw_dimension = 0
-        for row in payload:
-            if not isinstance(row, list) or not row:
-                raise RuntimeError("TEI returned an invalid vector")
-            raw_dimension = len(row)
-            if raw_dimension < self.output_dim:
-                raise RuntimeError(
-                    f"TEI vector dimension {raw_dimension} is smaller than {self.output_dim}"
-                )
-            projected = [float(value) for value in row[: self.output_dim]]
-            if not all(math.isfinite(value) for value in projected):
-                raise RuntimeError("TEI returned a non-finite vector")
+        for vector in payload:
+            if not isinstance(vector, list) or not vector:
+                raise EmbeddingServiceError("TEI returned an invalid vector")
+            values = [float(value) for value in vector]
+            if not all(math.isfinite(value) for value in values):
+                raise EmbeddingServiceError("TEI returned non-finite vector values")
+            raw_dimension = len(values) if raw_dimension == 0 else raw_dimension
+            if len(values) != raw_dimension or len(values) < self.output_dim:
+                raise EmbeddingServiceError("TEI returned inconsistent or undersized vectors")
+            values = values[: self.output_dim]
             if self.normalize:
-                norm = math.sqrt(sum(value * value for value in projected))
+                norm = math.sqrt(sum(value * value for value in values))
                 if norm == 0:
-                    raise RuntimeError("TEI returned a zero vector")
-                projected = [value / norm for value in projected]
-            vectors.append(tuple(projected))
+                    raise EmbeddingServiceError("TEI returned a zero vector")
+                values = [value / norm for value in values]
+            vectors.append(tuple(values))
         return EmbeddingBatchResult(
             vectors=tuple(vectors),
+            endpoint=self.endpoint,
             raw_dimension=raw_dimension,
             final_dimension=self.output_dim,
-            endpoint=self.endpoint,
-            latency_seconds=round(time.monotonic() - started, 6),
             text_count=len(texts),
+            latency_seconds=round(time.monotonic() - started, 6),
         )

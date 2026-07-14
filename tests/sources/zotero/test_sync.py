@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from knowledgehub.core.atomic import atomic_write_json
+from knowledgehub.sources.zotero.attachments import AttachmentRequest
 from knowledgehub.sources.zotero.models import (
     RuntimeDependencies,
     SyncMode,
@@ -19,6 +20,7 @@ from knowledgehub.sources.zotero.sync import (
     _apply_remote_state,
     _PublicationSession,
     _RemoteChanges,
+    _select_attachment_requests,
     recover_publications,
     resolve_attachments_once,
     sync_once,
@@ -389,3 +391,54 @@ def test_recover_publications_rolls_back_uncommitted_sync(tmp_path: Path) -> Non
     assert not staged.exists()
     assert not backup.exists()
     assert not intent.exists()
+
+
+def test_recover_publications_removes_orphan_staging(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    orphan = data_dir / ".staging" / "abandoned" / "partial.pdf"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"partial")
+    store = ZoteroStateStore(data_dir)
+    store.initialize()
+
+    recover_publications(data_dir, store)
+
+    assert not orphan.parent.exists()
+
+
+def test_attachment_request_selection_is_stable_and_validated() -> None:
+    requests = [
+        AttachmentRequest("AAAA1111", "a.pdf"),
+        AttachmentRequest("BBBB2222", "b.pdf"),
+        AttachmentRequest("CCCC3333", "c.pdf"),
+    ]
+
+    assert [
+        request.attachment_key
+        for request in _select_attachment_requests(
+            requests,
+            attachment_keys=("CCCC3333", "AAAA1111"),
+            limit=1,
+        )
+    ] == ["AAAA1111"]
+    with pytest.raises(ZoteroError, match="not an eligible PDF") as error:
+        _select_attachment_requests(
+            requests,
+            attachment_keys=("MISSING1",),
+            limit=None,
+        )
+    assert error.value.code == "attachment_not_found"
+
+
+def test_stale_running_run_is_closed_before_next_run(tmp_path: Path) -> None:
+    store = ZoteroStateStore(tmp_path / "data")
+    store.initialize()
+    summary = SyncSummary(sync_id="stale", mode="attachments", status="running")
+    store.start_run(summary)
+
+    assert store.fail_incomplete_runs() == ["stale"]
+    assert store.fail_incomplete_runs() == []
+    run = store.recent_runs()[0]
+    assert run["status"] == "failed"
+    assert run["error_code"] == "interrupted_or_crashed"
+    assert run["finished_at"] is not None

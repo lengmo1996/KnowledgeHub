@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
+from knowledgehub.chunking.fingerprints import document_chunk_fingerprint
 from knowledgehub.chunking.structural import StructuralChunker
 from knowledgehub.pipeline.artifacts import write_chunks_parquet, write_parsed
 from knowledgehub.pipeline.config import GPUPlan, RagConfig
@@ -59,7 +60,7 @@ def run_parse_workers(
     partitions = partition_documents(documents, worker_count)
     context = mp.get_context("spawn")
     output: Any = context.Queue()
-    processes: list[mp.Process] = []
+    processes: list[Any] = []
     for partition_id, tasks in enumerate(partitions):
         gpu_id = plan.gpu_ids[partition_id] if plan.gpu_ids else None
         process = context.Process(
@@ -157,9 +158,7 @@ def _worker_main(
             chunks = chunker.chunk(document, parsed)
             write_parsed(config.data_dir, parsed)
             write_chunks_parquet(config.data_dir, document.document_id, chunks)
-            chunk_fingerprint = hashlib.sha256(
-                "".join(value.chunk_fingerprint for value in chunks).encode("ascii")
-            ).hexdigest()
+            chunk_fingerprint = document_chunk_fingerprint(config, parsed.parse_fingerprint)
             output.put(
                 _result_mapping(
                     ParseWorkerResult(

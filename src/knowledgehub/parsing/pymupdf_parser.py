@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
-from knowledgehub.core.hashing import sha256_json
+from knowledgehub.chunking.fingerprints import document_parse_fingerprint
 from knowledgehub.pipeline.models import ParsedDocument, SourceDocument
 
 
@@ -30,12 +30,11 @@ class PyMuPDFParser:
                 if text:
                     markdown_parts.append(f"<!-- page:{index + 1} -->\n{text}")
             page_count = len(pdf)
-        fingerprint = sha256_json(
-            {
-                "document_content": document.source_content_fingerprint,
-                "parser": self.name,
-                "parser_version": self.version,
-            }
+        fingerprint = document_parse_fingerprint(
+            document,
+            parser_name=self.name,
+            parser_version=self.version,
+            ocr=False,
         )
         return ParsedDocument(
             document_id=document.document_id,

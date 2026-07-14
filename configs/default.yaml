@@ -4,7 +4,7 @@ sources:
     api_base_url: https://api.zotero.org
     library_type: user
     library_id: null
-    webdav_dir: /data/Nutstore/zotero
+    webdav_dir: /data/KnowledgeHub/zotero_cache
     data_dir: /data/KnowledgeHub/zotero
     http_timeout_seconds: 30
     max_retries: 5

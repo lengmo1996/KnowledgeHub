@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from knowledgehub.core.atomic import atomic_write_json, atomic_write_text, fsync_directory
 from knowledgehub.core.hashing import sha256_text
@@ -37,9 +37,47 @@ def write_parsed(data_dir: Path, parsed: ParsedDocument) -> tuple[Path, Path]:
     return json_path, markdown_path
 
 
-def write_chunks_parquet(
-    data_dir: Path, document_id: str, chunks: Sequence[ChunkRecord]
-) -> Path:
+def read_parsed(data_dir: Path, document_id: str) -> ParsedDocument:
+    """Load a validated parsed artifact for a chunk-only rebuild.
+
+    Docling's JSON representation is rehydrated when possible so HybridChunker
+    retains structure.  The Markdown representation remains the deterministic
+    fallback for parser formats that do not expose a native document model.
+    """
+
+    name = safe_document_name(document_id)
+    json_path = data_dir / "parsed" / "json" / f"{name}.json"
+    markdown_path = data_dir / "parsed" / "markdown" / f"{name}.md"
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("document_id") != document_id:
+        raise RuntimeError(f"parsed artifact identity mismatch: {document_id}")
+    structured = payload.get("structured")
+    if not isinstance(structured, dict):
+        raise RuntimeError(f"parsed artifact structure is invalid: {document_id}")
+    parser_name = str(payload.get("parser_name") or "")
+    native: Any | None = None
+    if parser_name == "docling":
+        try:
+            from docling_core.types.doc import DoclingDocument
+
+            native = DoclingDocument.model_validate(structured)
+        except (ImportError, TypeError, ValueError):
+            # Older Docling JSON may no longer validate after an upgrade.  Its
+            # immutable Markdown artifact still permits a safe chunk rebuild.
+            native = None
+    return ParsedDocument(
+        document_id=document_id,
+        parser_name=parser_name,
+        parser_version=str(payload.get("parser_version") or ""),
+        parse_fingerprint=str(payload.get("parse_fingerprint") or ""),
+        markdown=markdown_path.read_text(encoding="utf-8"),
+        structured=structured,
+        page_count=int(payload.get("page_count") or 0),
+        native=native,
+    )
+
+
+def write_chunks_parquet(data_dir: Path, document_id: str, chunks: Sequence[ChunkRecord]) -> Path:
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq

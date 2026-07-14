@@ -76,18 +76,33 @@ def test_resolve_attachments_cli_dispatches_local_operation(
 
     config = zotero_config_factory()
     _patch_config(monkeypatch, config)
-    monkeypatch.setattr(
-        cli,
-        "resolve_attachments_once",
-        lambda received: SyncSummary(
+    seen: dict[str, object] = {}
+
+    def fake_resolve(received, *, limit=None, attachment_keys=None):
+        seen.update(limit=limit, attachment_keys=attachment_keys)
+        return SyncSummary(
             sync_id="local",
             mode="attachments",
             status="success" if received is config else "failed",
-        ),
-    )
+        )
 
-    assert main(["zotero", "resolve-attachments"]) == 0
+    monkeypatch.setattr(cli, "resolve_attachments_once", fake_resolve)
+
+    assert (
+        main(
+            [
+                "zotero",
+                "resolve-attachments",
+                "--limit",
+                "20",
+                "--attachment-key",
+                "ABCD1234",
+            ]
+        )
+        == 0
+    )
     assert json.loads(capsys.readouterr().out)["mode"] == "attachments"
+    assert seen == {"limit": 20, "attachment_keys": ["ABCD1234"]}
 
 
 def test_validate_cli_uses_report_validity_as_exit_status(

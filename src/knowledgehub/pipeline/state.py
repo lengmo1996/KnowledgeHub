@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -35,13 +34,16 @@ class PipelineState:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version > PIPELINE_DB_VERSION:
                 raise RuntimeError(f"pipeline database version {version} is newer than supported")
             if version == 0:
                 connection.executescript(_SCHEMA)
                 connection.execute(f"PRAGMA user_version={PIPELINE_DB_VERSION}")
+        finally:
+            connection.close()
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -85,18 +87,24 @@ class PipelineState:
             )
 
     def document(self, document_id: str) -> dict[str, Any] | None:
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             row = connection.execute(
                 "SELECT * FROM pipeline_documents WHERE document_id=?", (document_id,)
             ).fetchone()
+        finally:
+            connection.close()
         return dict(row) if row else None
 
     def documents(self, *, active_only: bool = False) -> dict[str, dict[str, Any]]:
         query = "SELECT * FROM pipeline_documents"
         if active_only:
             query += " WHERE source_status='ready'"
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             rows = connection.execute(query).fetchall()
+        finally:
+            connection.close()
         return {str(row["document_id"]): dict(row) for row in rows}
 
     def upsert_source_document(
@@ -153,6 +161,42 @@ class PipelineState:
             WHERE document_id=?
             """,
             (status, reason, utc_now(), document_id),
+        )
+        connection.execute("UPDATE chunks SET active=0 WHERE document_id=?", (document_id,))
+        self.enqueue_index_operation(connection, document_id, "delete", reason)
+
+    def invalidate_document_content(
+        self, connection: sqlite3.Connection, document_id: str, *, reason: str
+    ) -> None:
+        """Invalidate every derived stage without changing source readiness."""
+
+        connection.execute(
+            """
+            UPDATE pipeline_documents SET
+                parse_status='pending', chunk_status='stale', embedding_status='stale',
+                dense_index_status='stale', sparse_index_status='stale',
+                last_error=NULL, last_processed_at=?
+            WHERE document_id=?
+            """,
+            (utc_now(), document_id),
+        )
+        connection.execute("UPDATE chunks SET active=0 WHERE document_id=?", (document_id,))
+        self.enqueue_index_operation(connection, document_id, "delete", reason)
+
+    def invalidate_document_chunks(
+        self, connection: sqlite3.Connection, document_id: str, *, reason: str
+    ) -> None:
+        """Invalidate chunk and index stages while preserving a valid parse."""
+
+        connection.execute(
+            """
+            UPDATE pipeline_documents SET
+                chunk_status='pending', embedding_status='stale',
+                dense_index_status='stale', sparse_index_status='stale',
+                last_error=NULL, last_processed_at=?
+            WHERE document_id=?
+            """,
+            (utc_now(), document_id),
         )
         connection.execute("UPDATE chunks SET active=0 WHERE document_id=?", (document_id,))
         self.enqueue_index_operation(connection, document_id, "delete", reason)
@@ -244,8 +288,84 @@ class PipelineState:
                 ),
             )
 
+    def prepare_work(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        stage: str,
+        assignments: Sequence[tuple[str, int]],
+    ) -> None:
+        """Recover abandoned claims and durably enqueue deterministic work."""
+
+        connection.execute(
+            """
+            UPDATE work_queue SET status='pending', worker_id=NULL, updated_at=?
+            WHERE stage=? AND status='running'
+            """,
+            (utc_now(), stage),
+        )
+        now = utc_now()
+        for document_id, partition_id in assignments:
+            connection.execute(
+                """
+                INSERT INTO work_queue(
+                    document_id, stage, partition_id, status, updated_at
+                ) VALUES (?, ?, ?, 'pending', ?)
+                ON CONFLICT(document_id, stage) DO UPDATE SET
+                    partition_id=excluded.partition_id, status='pending',
+                    worker_id=NULL, updated_at=excluded.updated_at, last_error=NULL
+                """,
+                (document_id, stage, partition_id, now),
+            )
+
+    def claim_work(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        document_id: str,
+        stage: str,
+        worker_id: str,
+    ) -> bool:
+        result = connection.execute(
+            """
+            UPDATE work_queue SET
+                status='running', worker_id=?, attempts=attempts+1, updated_at=?
+            WHERE document_id=? AND stage=? AND status='pending'
+            """,
+            (worker_id, utc_now(), document_id, stage),
+        )
+        return result.rowcount == 1
+
+    def finish_work(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        document_id: str,
+        stage: str,
+        success: bool,
+        error: str | None = None,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE work_queue SET status=?, updated_at=?, last_error=?
+            WHERE document_id=? AND stage=?
+            """,
+            ("success" if success else "failed", utc_now(), error, document_id, stage),
+        )
+
+    def work_items(self, stage: str) -> list[dict[str, Any]]:
+        connection = self.connect()
+        try:
+            rows = connection.execute(
+                "SELECT * FROM work_queue WHERE stage=? ORDER BY document_id", (stage,)
+            ).fetchall()
+        finally:
+            connection.close()
+        return [dict(row) for row in rows]
+
     def last_consumed_delta(self, source: str) -> dict[str, Any] | None:
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             row = connection.execute(
                 """
                 SELECT * FROM consumed_deltas
@@ -253,6 +373,8 @@ class PipelineState:
                 """,
                 (source,),
             ).fetchone()
+        finally:
+            connection.close()
         return dict(row) if row else None
 
     def mark_delta_consumed(
@@ -301,15 +423,16 @@ class PipelineState:
         )
 
     def pending_index_operations(self) -> list[dict[str, Any]]:
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             rows = connection.execute(
                 "SELECT * FROM index_operations WHERE status='pending' ORDER BY document_id"
             ).fetchall()
+        finally:
+            connection.close()
         return [dict(row) for row in rows]
 
-    def complete_index_operation(
-        self, connection: sqlite3.Connection, document_id: str
-    ) -> None:
+    def complete_index_operation(self, connection: sqlite3.Connection, document_id: str) -> None:
         connection.execute(
             "UPDATE index_operations SET status='success', completed_at=? WHERE document_id=?",
             (utc_now(), document_id),

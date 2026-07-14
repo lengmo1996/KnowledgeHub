@@ -1,0 +1,141 @@
+name: knowledgehub-rag
+
+x-app: &app
+  build:
+    context: ../..
+    dockerfile: deploy/services/Dockerfile
+  image: knowledgehub-rag-app:0.1.0
+  env_file:
+    - path: "${KH_ENV_FILE:-/etc/knowledgehub/rag.env}"
+      required: false
+  volumes:
+    - "${KH_MODEL_CACHE_DIR:-/data/KnowledgeHub/model-cache}:/data/KnowledgeHub/model-cache"
+  security_opt:
+    - no-new-privileges:true
+
+x-gpu0: &gpu0
+  driver: nvidia
+  device_ids: ["0"]
+  capabilities: [gpu]
+
+x-gpu1: &gpu1
+  driver: nvidia
+  device_ids: ["1"]
+  capabilities: [gpu]
+
+services:
+  embedding-gpu0:
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.9
+    profiles: [embed-single, embed-dual, online-dual]
+    command:
+      - --model-id
+      - "${KH_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-4B}"
+      - --revision
+      - "${KH_EMBEDDING_REVISION:-5cf2132abc99cad020ac570b19d031efec650f2b}"
+      - --dtype
+      - float16
+      - --max-client-batch-size
+      - "32"
+      - --max-batch-tokens
+      - "${KH_EMBEDDING_MAX_BATCH_TOKENS:-8192}"
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - "${KH_MODEL_CACHE_DIR:-/data/KnowledgeHub/model-cache}/tei:/data"
+    deploy:
+      resources:
+        reservations:
+          devices: [*gpu0]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  embedding-gpu1:
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.9
+    profiles: [embed-dual]
+    command:
+      - --model-id
+      - "${KH_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-4B}"
+      - --revision
+      - "${KH_EMBEDDING_REVISION:-5cf2132abc99cad020ac570b19d031efec650f2b}"
+      - --dtype
+      - float16
+      - --max-client-batch-size
+      - "32"
+      - --max-batch-tokens
+      - "${KH_EMBEDDING_MAX_BATCH_TOKENS:-8192}"
+    ports:
+      - "127.0.0.1:8082:80"
+    volumes:
+      - "${KH_MODEL_CACHE_DIR:-/data/KnowledgeHub/model-cache}/tei:/data"
+    deploy:
+      resources:
+        reservations:
+          devices: [*gpu1]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  reranker-light-gpu1:
+    <<: *app
+    profiles: [rerank-light]
+    command:
+      - knowledgehub.services.reranker_api
+      - --config
+      - /app/configs/rag/default.yaml
+      - --device
+      - cuda:0
+      - --host
+      - 0.0.0.0
+    environment:
+      KH_ALLOW_NON_LOOPBACK: "true"
+      KH_RERANKER_PROFILE: light
+    ports:
+      - "127.0.0.1:8081:8081"
+    deploy:
+      resources:
+        reservations:
+          devices: [*gpu1]
+
+  reranker-quality-gpu1:
+    <<: *app
+    profiles: [rerank-quality, online-dual]
+    command:
+      - knowledgehub.services.reranker_api
+      - --config
+      - /app/configs/rag/default.yaml
+      - --device
+      - cuda:0
+      - --host
+      - 0.0.0.0
+    environment:
+      KH_ALLOW_NON_LOOPBACK: "true"
+      KH_RERANKER_PROFILE: quality
+    ports:
+      - "127.0.0.1:8081:8081"
+    deploy:
+      resources:
+        reservations:
+          devices: [*gpu1]
+
+  search-api:
+    <<: *app
+    profiles: [online-dual]
+    command:
+      - knowledgehub.services.search_api
+      - --config
+      - /app/configs/rag/default.yaml
+      - --host
+      - 0.0.0.0
+    environment:
+      KH_ALLOW_NON_LOOPBACK: "true"
+      KH_QDRANT_URL: http://qdrant:6333
+      KH_EMBED_ENDPOINTS: http://embedding-gpu0:80
+      KH_RERANKER_URL: http://reranker-quality-gpu1:8081
+      KH_RERANKER_PROFILE: quality
+    ports:
+      - "127.0.0.1:8090:8090"

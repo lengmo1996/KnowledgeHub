@@ -1,13 +1,15 @@
-"""Bounded TEI endpoint scheduling with quarantine and failover."""
+"""Thread-safe TEI endpoint selection, retry, and quarantine."""
 
 from __future__ import annotations
 
+import math
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
 from knowledgehub.embeddings.models import EmbeddingBatchResult
-from knowledgehub.embeddings.tei_client import TEIClient
+from knowledgehub.embeddings.tei_client import EmbeddingServiceError, TEIClient
 
 
 @dataclass(slots=True)
@@ -15,9 +17,11 @@ class _EndpointState:
     client: TEIClient
     outstanding: int = 0
     failures: int = 0
-    quarantined: bool = False
+    quarantined_until: float = 0.0
     batches: int = 0
     texts: int = 0
+    latency_seconds: float = 0.0
+    latencies: list[float] = field(default_factory=list)
 
 
 class EndpointPool:
@@ -26,17 +30,21 @@ class EndpointPool:
         clients: Sequence[TEIClient],
         *,
         strategy: str = "least_outstanding",
-        max_failures: int = 2,
+        max_attempts: int = 3,
+        quarantine_seconds: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not clients:
             raise ValueError("endpoint pool requires at least one client")
         if strategy not in {"round_robin", "least_outstanding"}:
-            raise ValueError("unsupported endpoint strategy")
+            raise ValueError("invalid endpoint strategy")
         self._states = [_EndpointState(client=value) for value in clients]
         self.strategy = strategy
-        self.max_failures = max_failures
+        self.max_attempts = max_attempts
+        self.quarantine_seconds = quarantine_seconds
+        self.clock = clock
         self._lock = threading.Lock()
-        self._round_robin = 0
+        self._cursor = 0
 
     @classmethod
     def create(
@@ -46,12 +54,11 @@ class EndpointPool:
         output_dim: int,
         normalize: bool,
         timeout_seconds: float,
-        strategy: str,
-        factory: Callable[..., TEIClient] = TEIClient,
+        strategy: str = "least_outstanding",
     ) -> "EndpointPool":
         return cls(
             [
-                factory(
+                TEIClient(
                     endpoint,
                     output_dim=output_dim,
                     normalize=normalize,
@@ -66,64 +73,100 @@ class EndpointPool:
         for state in self._states:
             state.client.close()
 
-    def health(self) -> dict[str, bool]:
-        return {state.client.endpoint: state.client.health() for state in self._states}
-
     def embed(self, texts: Sequence[str]) -> EmbeddingBatchResult:
-        attempted: set[str] = set()
-        last_error: Exception | None = None
-        while len(attempted) < len(self._states):
-            state = self._acquire(attempted)
-            attempted.add(state.client.endpoint)
+        errors: list[str] = []
+        tried: set[str] = set()
+        for _ in range(max(self.max_attempts, len(self._states))):
+            state = self._acquire(exclude=tried)
+            tried.add(state.client.endpoint)
             try:
                 result = state.client.embed(texts)
-            except Exception as exc:
-                last_error = exc
-                with self._lock:
-                    state.outstanding -= 1
-                    state.failures += 1
-                    state.quarantined = state.failures >= self.max_failures
+            except EmbeddingServiceError as exc:
+                errors.append(str(exc))
+                self._release(state, failed=True, texts=0, latency=0.0)
+                if len(tried) == len(self._states):
+                    tried.clear()
                 continue
-            with self._lock:
-                state.outstanding -= 1
-                state.failures = 0
-                state.batches += 1
-                state.texts += len(texts)
+            self._release(
+                state,
+                failed=False,
+                texts=result.text_count,
+                latency=result.latency_seconds,
+            )
             return result
-        raise RuntimeError("all embedding endpoints failed") from last_error
+        raise EmbeddingServiceError("all TEI endpoints failed: " + "; ".join(errors))
 
-    def stats(self) -> dict[str, dict[str, int | bool]]:
+    def stats(self) -> dict[str, dict[str, float | int]]:
         with self._lock:
             return {
-                state.client.endpoint: {
-                    "batches": state.batches,
-                    "texts": state.texts,
-                    "failures": state.failures,
-                    "outstanding": state.outstanding,
-                    "quarantined": state.quarantined,
+                value.client.endpoint: {
+                    "batches": value.batches,
+                    "failures": value.failures,
+                    "latency_seconds": round(value.latency_seconds, 6),
+                    "p95_latency_seconds": _percentile(value.latencies, 0.95),
+                    "outstanding": value.outstanding,
+                    "texts": value.texts,
                 }
-                for state in self._states
+                for value in self._states
             }
 
-    def _acquire(self, excluded: set[str]) -> _EndpointState:
+    def health(self) -> dict[str, bool]:
+        return {value.client.endpoint: value.client.health() for value in self._states}
+
+    def _acquire(self, *, exclude: set[str]) -> _EndpointState:
         with self._lock:
+            now = self.clock()
             eligible = [
-                state
-                for state in self._states
-                if not state.quarantined and state.client.endpoint not in excluded
+                value
+                for value in self._states
+                if value.client.endpoint not in exclude and value.quarantined_until <= now
             ]
             if not eligible:
-                # A request is allowed to probe quarantined endpoints once all
-                # healthy endpoints have been attempted.
-                eligible = [
-                    state for state in self._states if state.client.endpoint not in excluded
-                ]
+                eligible = [value for value in self._states if value.client.endpoint not in exclude]
             if not eligible:
-                raise RuntimeError("no embedding endpoint is available")
+                eligible = list(self._states)
             if self.strategy == "round_robin":
-                state = eligible[self._round_robin % len(eligible)]
-                self._round_robin += 1
+                state = eligible[self._cursor % len(eligible)]
+                self._cursor += 1
             else:
-                state = min(eligible, key=lambda value: (value.outstanding, value.client.endpoint))
+                # Sequential coordinators still need to exercise both replicas.
+                # Completed batch count provides a deterministic tie-breaker
+                # when all endpoints currently have zero outstanding requests.
+                state = min(
+                    eligible,
+                    key=lambda value: (
+                        value.outstanding,
+                        value.batches,
+                        value.failures,
+                        value.client.endpoint,
+                    ),
+                )
             state.outstanding += 1
             return state
+
+    def _release(
+        self,
+        state: _EndpointState,
+        *,
+        failed: bool,
+        texts: int,
+        latency: float,
+    ) -> None:
+        with self._lock:
+            state.outstanding = max(0, state.outstanding - 1)
+            if failed:
+                state.failures += 1
+                state.quarantined_until = self.clock() + self.quarantine_seconds
+            else:
+                state.batches += 1
+                state.texts += texts
+                state.latency_seconds += latency
+                state.latencies.append(latency)
+
+
+def _percentile(values: Sequence[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, math.ceil(len(ordered) * percentile) - 1)
+    return round(float(ordered[index]), 6)

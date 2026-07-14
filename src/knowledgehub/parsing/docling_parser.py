@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
-from knowledgehub.core.hashing import sha256_json
+from knowledgehub.chunking.fingerprints import document_parse_fingerprint
 from knowledgehub.pipeline.models import ParsedDocument, SourceDocument
 
 
@@ -58,13 +58,11 @@ class DoclingParser:
         markdown = native.export_to_markdown()
         pages = getattr(native, "pages", {})
         page_count = len(pages) if hasattr(pages, "__len__") else 0
-        fingerprint = sha256_json(
-            {
-                "document_content": document.source_content_fingerprint,
-                "ocr": self._config["ocr"],
-                "parser": self.name,
-                "parser_version": self.version,
-            }
+        fingerprint = document_parse_fingerprint(
+            document,
+            parser_name=self.name,
+            parser_version=self.version,
+            ocr=bool(self._config["ocr"]),
         )
         return ParsedDocument(
             document_id=document.document_id,

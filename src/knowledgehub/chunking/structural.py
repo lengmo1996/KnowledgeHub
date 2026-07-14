@@ -6,6 +6,7 @@ import re
 import uuid
 from typing import Any, Iterable, Mapping
 
+from knowledgehub.chunking.fingerprints import document_chunk_fingerprint
 from knowledgehub.core.hashing import sha256_json, sha256_text
 from knowledgehub.pipeline.config import RagConfig
 from knowledgehub.pipeline.models import ChunkRecord, ParsedDocument, SourceDocument
@@ -30,21 +31,15 @@ class StructuralChunker:
         tokenizer = AutoTokenizer.from_pretrained(
             self.config.embedding_model,
             revision=self.config.embedding_revision,
-            cache_dir=self.config.model_cache_dir,
+            cache_dir=self.config.model_cache_dir / "tei",
             padding_side="left",
             local_files_only=True,
         )
-        wrapper = HuggingFaceTokenizer(
-            tokenizer=tokenizer, max_tokens=self.config.chunk_max_tokens
-        )
+        wrapper = HuggingFaceTokenizer(tokenizer=tokenizer, max_tokens=self.config.chunk_max_tokens)
         self._tokenizer = wrapper
-        self._chunker = HybridChunker(
-            tokenizer=wrapper, merge_peers=self.config.chunk_merge_peers
-        )
+        self._chunker = HybridChunker(tokenizer=wrapper, merge_peers=self.config.chunk_merge_peers)
 
-    def chunk(
-        self, document: SourceDocument, parsed: ParsedDocument
-    ) -> list[ChunkRecord]:
+    def chunk(self, document: SourceDocument, parsed: ParsedDocument) -> list[ChunkRecord]:
         rows: list[tuple[str, Mapping[str, Any]]] = []
         if parsed.native is not None:
             self._load()
@@ -52,12 +47,17 @@ class StructuralChunker:
             for value in self._chunker.chunk(dl_doc=parsed.native):
                 text = str(value.text or "").strip()
                 if text:
-                    meta = value.meta.model_dump(mode="json") if hasattr(value.meta, "model_dump") else {}
+                    meta = (
+                        value.meta.model_dump(mode="json")
+                        if hasattr(value.meta, "model_dump")
+                        else {}
+                    )
                     rows.append((text, meta if isinstance(meta, Mapping) else {}))
         else:
             rows.extend(self._fallback_chunks(parsed.markdown))
 
         records: list[ChunkRecord] = []
+        document_chunk_config = document_chunk_fingerprint(self.config, parsed.parse_fingerprint)
         for index, (text, metadata) in enumerate(rows):
             pages = _page_numbers(metadata)
             token_count = self._count_tokens(text)
@@ -65,7 +65,7 @@ class StructuralChunker:
                 {
                     "document_id": document.document_id,
                     "index": index,
-                    "parser": parsed.parse_fingerprint,
+                    "chunk_config": document_chunk_config,
                     "text": text,
                 }
             )

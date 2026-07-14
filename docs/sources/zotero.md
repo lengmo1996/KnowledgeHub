@@ -12,7 +12,7 @@ runtime root:
 | Channel | Purpose | Access |
 | --- | --- | --- |
 | Zotero Web API v3 | Metadata, versions, permissions, collections, and deletions | HTTPS GET only |
-| `ZOTERO_WEBDAV_DIR` | Nutstore-synchronized `<attachment_key>.zip` and `.prop` files | Local read only |
+| `ZOTERO_WEBDAV_DIR` | Local rclone mirror containing `<attachment_key>.zip` and `.prop` files | Local read only |
 | `ZOTERO_DATA_DIR` | SQLite state, extraction cache, manifests, runs, and logs | Local read/write |
 
 KnowledgeHub never calls the Zotero Local API, reads `zotero.sqlite`, requires
@@ -39,7 +39,7 @@ wins. A source YAML may contain a direct mapping (as in
 | `library_type` | `ZOTERO_LIBRARY_TYPE` | `user` | `user` or `group` |
 | `library_id` | `ZOTERO_LIBRARY_ID` | none | Numeric; required for group, optional for user |
 | `api_base_url` | `ZOTERO_API_BASE_URL` | `https://api.zotero.org` | HTTPS URL; alternate hosts are primarily for tests |
-| `webdav_dir` | `ZOTERO_WEBDAV_DIR` | `/data/Nutstore/zotero` | Existing readable, read-only source |
+| `webdav_dir` | `ZOTERO_WEBDAV_DIR` | `/data/KnowledgeHub/zotero_cache` | Existing readable local mirror |
 | `data_dir` | `ZOTERO_DATA_DIR` | `/data/KnowledgeHub/zotero` | Writable runtime root, separate from WebDAV |
 | `http_timeout_seconds` | `ZOTERO_HTTP_TIMEOUT_SECONDS` | `30` | Positive request timeout |
 | `max_retries` | `ZOTERO_MAX_RETRIES` | `5` | Per-request retry limit |
@@ -124,6 +124,43 @@ hashes, reuses the same resolver/document/manifest pipeline, emits a delta for
 actual changes, and does not modify `library_version`. Use it when Nutstore
 finishes syncing after metadata arrived, a missing/unstable archive becomes
 available, or an archive is replaced under the same key.
+
+Use `--limit N` for a stable attachment-key-ordered bounded run, or repeat
+`--attachment-key KEY` to select specific eligible PDF attachments. Documents
+outside a bounded selection retain their previous resolution state. This is
+useful for smoke tests and large local mirrors; repeating a bounded run is
+idempotent.
+
+The production input is a real local mirror, not the `/data/Nutstore` FUSE
+mount. Refresh it with:
+
+```bash
+rclone sync nutstore:/zotero /data/KnowledgeHub/zotero_cache \
+  --transfers 1 --checkers 2 \
+  --tpslimit 1 --tpslimit-burst 1 \
+  --low-level-retries 3 --retries 3 --retries-sleep 60s \
+  --delete-after
+```
+
+`deploy/systemd/knowledgehub-zotero-cache-refresh.service` contains this
+operation. `knowledgehub-zotero-sync.service` requires it, so the first service
+start creates and fully populates the mirror, while later timer runs transfer
+only files whose rclone size/modtime comparison changed. A manual first sync is
+therefore optional. `--delete-after` only removes stale files from the local,
+disposable mirror; the remote is always the source argument and is never a
+deletion target.
+
+The source manifest must not be the sole input to this refresh. It is produced
+after attachment resolution, and Zotero API metadata cannot reveal a ZIP that
+was replaced in WebDAV without a metadata change. rclone's remote listing is
+the authoritative transfer detector; the delta catalog remains the downstream
+exactly-once control plane. After the mirror refresh, a normal incremental
+source run detects changed archive stat/hash values, publishes the resulting
+document delta, and leaves `library_version` governed only by the Zotero API.
+
+If Nutstore returns `BlockedTemporarily`, the refresh service fails and the
+dependent source sync does not start. Allow a cooldown and restart the service;
+already downloaded local files are retained.
 
 ## Archive mapping and safe extraction
 
@@ -233,6 +270,8 @@ knowledgehub --config /etc/knowledgehub/zotero.yaml zotero doctor
 knowledgehub --config /etc/knowledgehub/zotero.yaml zotero sync --once
 knowledgehub --config /etc/knowledgehub/zotero.yaml zotero sync --full
 knowledgehub --config /etc/knowledgehub/zotero.yaml zotero resolve-attachments
+knowledgehub --config /etc/knowledgehub/zotero.yaml zotero resolve-attachments --limit 20
+knowledgehub --config /etc/knowledgehub/zotero.yaml zotero resolve-attachments --attachment-key ABCD1234
 knowledgehub --config /etc/knowledgehub/zotero.yaml zotero validate
 knowledgehub --config /etc/knowledgehub/zotero.yaml zotero status
 knowledgehub --config /etc/knowledgehub/zotero.yaml zotero watch --interval 300

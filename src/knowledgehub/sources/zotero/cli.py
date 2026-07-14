@@ -39,8 +39,15 @@ def add_zotero_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     watch = commands.add_parser("watch", help="Poll by repeatedly calling the same sync_once()")
     watch.add_argument("--interval", type=int, help="Polling interval in seconds")
 
-    commands.add_parser(
+    resolve = commands.add_parser(
         "resolve-attachments", help="Rescan WebDAV archives without changing library_version"
+    )
+    resolve.add_argument("--limit", type=int, help="Resolve at most this many eligible PDFs")
+    resolve.add_argument(
+        "--attachment-key",
+        action="append",
+        dest="attachment_keys",
+        help="Resolve only this attachment key (repeatable)",
     )
     commands.add_parser("validate", help="Validate SQLite, relationships, cache and manifests")
     commands.add_parser("doctor", help="Check configuration, paths, API key and library permission")
@@ -79,7 +86,13 @@ def run_zotero_command(args: argparse.Namespace) -> int:
             _emit(sync_once(config, mode=mode).to_dict())
             return 0
         if command == "resolve-attachments":
-            _emit(resolve_attachments_once(config).to_dict())
+            _emit(
+                resolve_attachments_once(
+                    config,
+                    limit=args.limit,
+                    attachment_keys=args.attachment_keys,
+                ).to_dict()
+            )
             return 0
         if command == "watch":
             interval = args.interval if args.interval is not None else config.poll_interval_seconds

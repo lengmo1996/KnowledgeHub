@@ -1,4 +1,4 @@
-"""Dense+sparse Qdrant indexing."""
+"""Dense and sparse Qdrant indexing."""
 
 from knowledgehub.indexing.qdrant import QdrantIndex
 

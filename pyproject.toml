@@ -16,6 +16,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+rag = [
+  "docling>=2.112,<3",
+  "fastapi>=0.139,<1",
+  "fastembed>=0.8,<1",
+  "numpy>=2.0,<3",
+  "pyarrow>=25,<26",
+  "PyMuPDF>=1.26,<2",
+  "qdrant-client>=1.18,<2",
+  "transformers>=5.13,<6",
+  "uvicorn>=0.51,<1",
+]
 dev = [
   "mypy>=1.8,<2",
   "pytest>=7.4,<9",
@@ -36,6 +47,12 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
+markers = [
+  "integration: tests requiring external services",
+  "gpu: tests requiring one CUDA GPU",
+  "dual_gpu: tests requiring two CUDA GPUs",
+  "manual: bounded tests run only by explicit operator action",
+]
 
 [tool.coverage.run]
 branch = true
@@ -72,3 +89,24 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = "knowledgehub.sources.zotero.attachments"
 disable_error_code = ["arg-type", "no-untyped-def", "unused-ignore"]
+
+[[tool.mypy.overrides]]
+module = [
+  "docling.*",
+  "docling_core.*",
+  "fastembed.*",
+  "fitz.*",
+  "pymupdf.*",
+  "pyarrow.*",
+  "qdrant_client.*",
+  "torch.*",
+  "transformers.*",
+  "uvicorn.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+ignore_missing_imports = true

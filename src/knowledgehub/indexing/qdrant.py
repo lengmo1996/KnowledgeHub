@@ -1,7 +1,8 @@
-"""Qdrant schema validation, idempotent replacement and hybrid search."""
+"""Qdrant named-vector schema and idempotent per-document operations."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from knowledgehub.pipeline.models import ChunkRecord
@@ -11,22 +12,30 @@ class QdrantSchemaError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class SearchPoint:
+    point_id: str
+    score: float
+    payload: Mapping[str, Any]
+
+
 class QdrantIndex:
     def __init__(
         self,
         url: str,
         collection: str,
+        dimension: int | None = None,
         *,
-        dense_dim: int,
-        client: Any | None = None,
+        dense_dim: int | None = None,
     ) -> None:
-        if client is None:
-            from qdrant_client import QdrantClient
+        from qdrant_client import QdrantClient
 
-            client = QdrantClient(url=url, timeout=60)
-        self.client = client
         self.collection = collection
-        self.dense_dim = dense_dim
+        resolved_dimension = dimension if dimension is not None else dense_dim
+        if resolved_dimension is None or resolved_dimension <= 0:
+            raise ValueError("dense vector dimension must be positive")
+        self.dimension = resolved_dimension
+        self.client: Any = QdrantClient(url=url, timeout=60)
 
     def ensure_collection(self) -> None:
         from qdrant_client import models
@@ -36,7 +45,7 @@ class QdrantIndex:
                 collection_name=self.collection,
                 vectors_config={
                     "dense": models.VectorParams(
-                        size=self.dense_dim, distance=models.Distance.COSINE, on_disk=True
+                        size=self.dimension, distance=models.Distance.COSINE, on_disk=True
                     )
                 },
                 sparse_vectors_config={
@@ -48,55 +57,12 @@ class QdrantIndex:
             return
         info = self.client.get_collection(self.collection)
         vectors = info.config.params.vectors
-        dense = vectors.get("dense") if isinstance(vectors, Mapping) else None
         sparse = info.config.params.sparse_vectors
-        if dense is None or int(dense.size) != self.dense_dim or "bm25" not in (sparse or {}):
-            raise QdrantSchemaError(
-                f"collection {self.collection} schema does not match dense={self.dense_dim}+bm25"
-            )
-
-    def replace_document(
-        self,
-        document_id: str,
-        chunks: Sequence[ChunkRecord],
-        dense_vectors: Sequence[Sequence[float]],
-        sparse_vectors: Sequence[tuple[Sequence[int], Sequence[float]]],
-    ) -> None:
-        from qdrant_client import models
-
-        if not (len(chunks) == len(dense_vectors) == len(sparse_vectors)):
-            raise ValueError("chunk, dense and sparse batch sizes differ")
-        self.delete_document(document_id)
-        points = []
-        for chunk, dense, sparse in zip(chunks, dense_vectors, sparse_vectors):
-            if len(dense) != self.dense_dim:
-                raise ValueError("dense vector dimension mismatch")
-            payload = {
-                **dict(chunk.metadata),
-                "attachment_key": chunk.attachment_key,
-                "chunk_id": chunk.chunk_id,
-                "chunk_index": chunk.chunk_index,
-                "document_id": chunk.document_id,
-                "page_end": chunk.page_end,
-                "page_start": chunk.page_start,
-                "section_path": list(chunk.section_path),
-                "text": chunk.text,
-                "text_sha256": chunk.text_sha256,
-            }
-            points.append(
-                models.PointStruct(
-                    id=chunk.chunk_id,
-                    vector={
-                        "dense": list(dense),
-                        "bm25": models.SparseVector(
-                            indices=list(sparse[0]), values=list(sparse[1])
-                        ),
-                    },
-                    payload=payload,
-                )
-            )
-        if points:
-            self.client.upsert(collection_name=self.collection, points=points, wait=True)
+        dense = vectors.get("dense") if isinstance(vectors, dict) else None
+        if dense is None or int(dense.size) != self.dimension:
+            raise QdrantSchemaError("existing collection dense vector schema does not match")
+        if not isinstance(sparse, dict) or "bm25" not in sparse:
+            raise QdrantSchemaError("existing collection sparse vector schema does not match")
 
     def delete_document(self, document_id: str) -> None:
         from qdrant_client import models
@@ -115,7 +81,52 @@ class QdrantIndex:
             wait=True,
         )
 
-    def update_payload(self, document_id: str, payload: Mapping[str, Any]) -> None:
+    def replace_document(
+        self,
+        document_id: str,
+        chunks: Sequence[ChunkRecord],
+        dense_vectors: Sequence[Sequence[float]],
+        sparse_vectors: Sequence[tuple[Sequence[int], Sequence[float]]],
+        *,
+        embedding_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        from qdrant_client import models
+
+        if not (len(chunks) == len(dense_vectors) == len(sparse_vectors)):
+            raise ValueError("chunk and vector counts do not match")
+        self.delete_document(document_id)
+        points = []
+        for chunk, dense, sparse in zip(chunks, dense_vectors, sparse_vectors, strict=True):
+            payload = {
+                **dict(chunk.metadata),
+                **dict(embedding_metadata or {}),
+                "attachment_key": chunk.attachment_key,
+                "chunk_id": chunk.chunk_id,
+                "chunk_index": chunk.chunk_index,
+                "document_id": chunk.document_id,
+                "page_end": chunk.page_end,
+                "page_start": chunk.page_start,
+                "section_path": list(chunk.section_path),
+                "text": chunk.text,
+                "text_sha256": chunk.text_sha256,
+                "token_count": chunk.token_count,
+            }
+            points.append(
+                models.PointStruct(
+                    id=chunk.chunk_id,
+                    vector={
+                        "dense": list(dense),
+                        "bm25": models.SparseVector(
+                            indices=list(sparse[0]), values=list(sparse[1])
+                        ),
+                    },
+                    payload=payload,
+                )
+            )
+        if points:
+            self.client.upsert(collection_name=self.collection, points=points, wait=True)
+
+    def update_document_payload(self, document_id: str, payload: Mapping[str, Any]) -> None:
         from qdrant_client import models
 
         self.client.set_payload(
@@ -131,6 +142,9 @@ class QdrantIndex:
             wait=True,
         )
 
+    def update_payload(self, document_id: str, payload: Mapping[str, Any]) -> None:
+        self.update_document_payload(document_id, payload)
+
     def query(
         self,
         *,
@@ -139,15 +153,15 @@ class QdrantIndex:
         mode: str,
         limit: int,
         prefetch_limit: int,
-        query_filter: Any | None = None,
-    ) -> list[Any]:
+        query_filter: Any = None,
+    ) -> list[SearchPoint]:
         from qdrant_client import models
 
-        sparse_query = models.SparseVector(indices=list(sparse[0]), values=list(sparse[1]))
+        sparse_vector = models.SparseVector(indices=list(sparse[0]), values=list(sparse[1]))
         if mode == "sparse":
             response = self.client.query_points(
-                self.collection,
-                query=sparse_query,
+                collection_name=self.collection,
+                query=sparse_vector,
                 using="bm25",
                 query_filter=query_filter,
                 limit=limit,
@@ -155,24 +169,29 @@ class QdrantIndex:
             )
         elif mode == "hybrid":
             if dense is None:
-                raise ValueError("hybrid search requires a dense query vector")
+                raise ValueError("hybrid query requires a dense vector")
             response = self.client.query_points(
-                self.collection,
+                collection_name=self.collection,
                 prefetch=[
-                    models.Prefetch(
-                        query=list(dense), using="dense", limit=prefetch_limit, filter=query_filter
-                    ),
-                    models.Prefetch(
-                        query=sparse_query,
-                        using="bm25",
-                        limit=prefetch_limit,
-                        filter=query_filter,
-                    ),
+                    models.Prefetch(query=list(dense), using="dense", limit=prefetch_limit),
+                    models.Prefetch(query=sparse_vector, using="bm25", limit=prefetch_limit),
                 ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
+                query_filter=query_filter,
                 limit=limit,
                 with_payload=True,
             )
         else:
             raise ValueError(f"unsupported query mode: {mode}")
-        return list(response.points)
+        return [
+            SearchPoint(
+                point_id=str(value.id), score=float(value.score), payload=value.payload or {}
+            )
+            for value in response.points
+        ]
+
+    def count(self) -> int:
+        return int(self.client.count(self.collection, exact=True).count)
+
+    def snapshot(self) -> str:
+        return str(self.client.create_snapshot(self.collection).name)

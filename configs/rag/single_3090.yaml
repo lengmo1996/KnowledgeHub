@@ -1,0 +1,9 @@
+rag:
+  gpu_mode: single
+  gpu_ids: [0]
+  parse_gpu_ids: [0]
+  parse_workers_per_gpu: 1
+  embedding_endpoints:
+    - http://127.0.0.1:8080
+  reranker_gpu_id: 0
+  reranker_profile: light

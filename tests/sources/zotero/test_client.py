@@ -291,8 +291,27 @@ def test_cross_origin_pagination_link_is_rejected_without_following_it(
         with pytest.raises(ZoteroError, match="cross-origin Zotero pagination link") as error:
             client.verify_key()
 
-    assert error.value.code == "invalid_response"
+        assert error.value.code == "invalid_response"
     assert [request.url.host for request in seen] == ["api.zotero.org"]
+
+
+def test_cross_origin_human_facing_alternate_link_is_allowed(zotero_config_factory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"A": 1},
+            headers={
+                "Link": '<https://www.zotero.org/users/123/items>; rel="alternate"',
+                "Last-Modified-Version": "1",
+            },
+            request=request,
+        )
+
+    with ZoteroClient(
+        zotero_config_factory(max_retries=0), transport=httpx.MockTransport(handler)
+    ) as client:
+        listing = client.versions("item", since=0)
+    assert listing.library_version == 1
 
 
 @pytest.mark.parametrize(

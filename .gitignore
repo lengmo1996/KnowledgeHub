@@ -36,9 +36,16 @@ venv/
 *.sqlite3-*
 *.db
 *.log
+*.parquet
+/benchmarks/
+/model-cache/
+/qdrant/
+/parsed/
+/chunks/
+/failures/
+/snapshots/
 
 # Zotero/WebDAV and extracted binary payloads are never source artifacts.
 *.zip
 *.prop
 *.pdf
-

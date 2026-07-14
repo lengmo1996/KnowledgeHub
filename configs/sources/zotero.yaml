@@ -5,8 +5,9 @@ library_type: user
 # Required for group libraries. May be null for a user library.
 library_id: null
 
-# This source directory is always opened read-only by KnowledgeHub.
-webdav_dir: /data/Nutstore/zotero
+# Local mirror refreshed from nutstore:/zotero. KnowledgeHub itself opens it
+# read-only; rclone is the only writer.
+webdav_dir: /data/KnowledgeHub/zotero_cache
 # SQLite, extracted PDFs, manifests, runs, and logs are written only here.
 data_dir: /data/KnowledgeHub/zotero
 

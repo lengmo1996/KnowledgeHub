@@ -206,6 +206,21 @@ def test_prepare_runtime_rejects_unreadable_source_and_data_inside_source(
     assert not nested.data_dir.exists()
 
 
+def test_prepare_runtime_classifies_webdav_io_error(
+    monkeypatch,
+    zotero_config_factory,
+) -> None:
+    config = zotero_config_factory()
+
+    def fail_is_dir(_path: Path) -> bool:
+        raise OSError(5, "mount unavailable")
+
+    monkeypatch.setattr(Path, "is_dir", fail_is_dir)
+    with pytest.raises(ZoteroError, match="cannot be accessed") as error:
+        config.prepare_runtime()
+    assert error.value.code == "config_error"
+
+
 def test_user_library_id_can_be_resolved_without_mutating_original() -> None:
     config = ZoteroConfig(api_key=SecretValue("secret"), library_id=None)
 

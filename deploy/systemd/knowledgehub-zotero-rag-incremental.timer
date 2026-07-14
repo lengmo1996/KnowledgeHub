@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the KnowledgeHub Zotero RAG incremental pipeline daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=10min
+Unit=knowledgehub-zotero-rag-incremental.service
+
+[Install]
+WantedBy=timers.target

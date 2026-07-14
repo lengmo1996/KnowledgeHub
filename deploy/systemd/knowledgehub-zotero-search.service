@@ -1,0 +1,23 @@
+[Unit]
+Description=KnowledgeHub loopback Search API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lengmo
+WorkingDirectory=/home/lengmo/KnowledgeHub
+EnvironmentFile=/etc/knowledgehub/rag.env
+ExecStart=/home/lengmo/anaconda3/bin/conda run -n rag --no-capture-output python -m knowledgehub.services.search_api --config configs/rag/default.yaml --host 127.0.0.1 --port 8090
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/lengmo/KnowledgeHub /home/lengmo/anaconda3 /data/KnowledgeHub/rag/zotero
+ReadWritePaths=/data/KnowledgeHub/model-cache
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=knowledgehub-search

@@ -72,6 +72,10 @@ class SourceDocument:
             raise ValueError("source document has empty required fields")
         if len(self.pdf_sha256) != 64:
             raise ValueError("invalid PDF SHA-256")
+        try:
+            int(self.pdf_sha256, 16)
+        except ValueError as exc:
+            raise ValueError("invalid PDF SHA-256") from exc
         return self
 
 

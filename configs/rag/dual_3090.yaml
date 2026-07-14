@@ -1,0 +1,11 @@
+rag:
+  gpu_mode: dual
+  gpu_ids: [0, 1]
+  parse_gpu_ids: [0, 1]
+  parse_workers_per_gpu: 1
+  embedding_endpoints:
+    - http://127.0.0.1:8080
+    - http://127.0.0.1:8082
+  embedding_request_strategy: least_outstanding
+  reranker_gpu_id: 1
+  reranker_profile: quality

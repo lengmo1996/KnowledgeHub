@@ -1,24 +1,25 @@
 [Unit]
 Description=KnowledgeHub Zotero incremental sync
-Documentation=file:///opt/knowledgehub/docs/sources/zotero.md
+Documentation=file:///home/lengmo/KnowledgeHub/docs/sources/zotero.md
 Wants=network-online.target
-After=network-online.target
-ConditionPathIsDirectory=/data/Nutstore/zotero
+Requires=knowledgehub-zotero-cache-refresh.service
+After=network-online.target knowledgehub-zotero-cache-refresh.service
 
 [Service]
 Type=oneshot
-User=knowledgehub
-Group=knowledgehub
-WorkingDirectory=/opt/knowledgehub
+User=lengmo
+WorkingDirectory=/home/lengmo/KnowledgeHub
 EnvironmentFile=/etc/knowledgehub/zotero.env
-ExecStart=/opt/knowledgehub/.venv/bin/knowledgehub --config /etc/knowledgehub/zotero.yaml zotero sync --once
+ExecStart=/home/lengmo/anaconda3/bin/conda run -n rag --no-capture-output knowledgehub --config /etc/knowledgehub/zotero.yaml zotero sync --once
 TimeoutStartSec=30min
 UMask=0077
 
-# The WebDAV mirror is an immutable input; all writes are confined to DATA_DIR.
+# The local attachment mirror is immutable to KnowledgeHub. Its prerequisite
+# rclone service is the only writer and completes before this unit starts.
 ProtectSystem=strict
-ProtectHome=true
-ReadOnlyPaths=/data/Nutstore/zotero
+ProtectHome=read-only
+ReadOnlyPaths=/home/lengmo/KnowledgeHub /home/lengmo/anaconda3
+ReadOnlyPaths=/data/KnowledgeHub/zotero_cache
 ReadWritePaths=/data/KnowledgeHub/zotero
 PrivateTmp=true
 PrivateDevices=true

@@ -68,7 +68,11 @@ class ZoteroManifestSource:
                     continue
                 try:
                     documents.append(SourceDocument.from_snapshot(value))
-                except ValueError:
+                except ValueError as exc:
+                    if value.get("status") == "ready":
+                        raise SourceContractError(
+                            f"invalid ready snapshot record at line {line_number}: {exc}"
+                        ) from exc
                     continue
                 if limit is not None and len(documents) >= limit:
                     break
@@ -76,6 +80,8 @@ class ZoteroManifestSource:
         return documents
 
     def pending_deltas(self, state: PipelineState) -> list[DeltaBatch]:
+        if not self.catalog_path.is_file():
+            raise SourceContractError("source delta catalog is missing; run full/reconcile")
         entries = read_delta_catalog(self.catalog_path)
         validate_delta_files(self.manifests_dir, entries)
         last = state.last_consumed_delta("zotero")
@@ -104,20 +110,30 @@ class ZoteroManifestSource:
                         f"invalid delta record in {entry.sync_id} line {line_number}"
                     )
                 operation = str(value.get("operation") or "")
+                document_id = str(value.get("document_id") or "")
+                if not document_id:
+                    raise SourceContractError(
+                        f"delta record has no document_id in {entry.sync_id} line {line_number}"
+                    )
                 document: SourceDocument | None = None
                 if operation == "upsert":
                     manifest = value.get("manifest_record")
                     if isinstance(manifest, Mapping):
                         try:
                             document = SourceDocument.from_snapshot(manifest)
-                        except ValueError:
+                        except ValueError as exc:
+                            if manifest.get("status") == "ready":
+                                raise SourceContractError(
+                                    f"invalid ready delta record in {entry.sync_id} "
+                                    f"line {line_number}: {exc}"
+                                ) from exc
                             document = None
                 elif operation != "delete":
                     raise SourceContractError(f"unsupported delta operation: {operation}")
                 events.append(
                     DeltaEvent(
                         operation=operation,
-                        document_id=str(value.get("document_id") or ""),
+                        document_id=document_id,
                         reason=str(value.get("reason") or ""),
                         document=document,
                         raw=dict(value),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
@@ -23,6 +23,24 @@ QUERY_INSTRUCTION = (
 
 class RagConfigError(ValueError):
     """A sanitized configuration failure."""
+
+
+class SecretValue:
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str = "") -> None:
+        self._value = value
+
+    def get_secret_value(self) -> str:
+        return self._value
+
+    def __bool__(self) -> bool:
+        return bool(self._value)
+
+    def __repr__(self) -> str:
+        return "SecretValue('********')"
+
+    __str__ = __repr__
 
 
 class GPUMode(str, Enum):
@@ -123,6 +141,8 @@ class RagConfig:
     reranker_gpu_id: int = 1
     reranker_max_length: int = 2048
     reranker_batch_size: int = 4
+    search_api_key: SecretValue = field(default_factory=SecretValue)
+    reranker_api_key: SecretValue = field(default_factory=SecretValue)
     sparse_model: str = "Qdrant/bm25"
     cuda_allow_tf32: bool = True
     gpu_memory_safety_margin_mb: int = 2048
@@ -217,7 +237,13 @@ class RagConfig:
         by_id = {device.logical_id: device for device in available}
         requested = GPUMode(self.gpu_mode)
         if requested is GPUMode.AUTO:
-            resolved = GPUMode.DUAL if len(available) >= 2 else GPUMode.SINGLE if available else GPUMode.CPU
+            resolved = (
+                GPUMode.DUAL
+                if len(available) >= 2
+                else GPUMode.SINGLE
+                if available
+                else GPUMode.CPU
+            )
         else:
             resolved = requested
         ids: tuple[int, ...]
@@ -305,11 +331,15 @@ _ENV_FIELDS = {
     "KH_EMBEDDING_QUERY_INSTRUCTION": "embedding_query_instruction",
     "KH_EMBED_ENDPOINTS": "embedding_endpoints",
     "KH_EMBED_REQUEST_STRATEGY": "embedding_request_strategy",
+    "KH_EMBEDDING_TIMEOUT_SECONDS": "embedding_timeout_seconds",
     "KH_RERANKER_PROFILE": "reranker_profile",
     "KH_RERANKER_URL": "reranker_url",
     "KH_RERANK_GPU_ID": "reranker_gpu_id",
     "KH_RERANKER_MAX_LENGTH": "reranker_max_length",
     "KH_RERANKER_BATCH_SIZE": "reranker_batch_size",
+    "KH_SEARCH_API_KEY": "search_api_key",
+    "KH_RERANKER_API_KEY": "reranker_api_key",
+    "KH_SPARSE_MODEL": "sparse_model",
     "KH_CUDA_ALLOW_TF32": "cuda_allow_tf32",
     "KH_GPU_MEMORY_SAFETY_MARGIN_MB": "gpu_memory_safety_margin_mb",
     "KH_RAG_LOG_LEVEL": "log_level",
@@ -352,6 +382,8 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 def _convert(name: str, value: Any) -> Any:
+    if name in {"search_api_key", "reranker_api_key"}:
+        return value if isinstance(value, SecretValue) else SecretValue(str(value).strip())
     if name in _PATH_FIELDS:
         return Path(str(value)).expanduser()
     if name in _TUPLE_INT_FIELDS:

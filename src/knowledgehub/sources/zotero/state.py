@@ -37,7 +37,8 @@ class ZoteroStateStore:
                 raise ZoteroError(
                     "state_error", f"State database is not a regular non-symlink file: {self.path}"
                 )
-        with self.connect() as connection:
+        connection = self.connect()
+        try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version > SCHEMA_VERSION:
                 raise ZoteroError(
@@ -47,6 +48,8 @@ class ZoteroStateStore:
             if version == 0:
                 connection.executescript(_SCHEMA_V1)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        finally:
+            connection.close()
         os.chmod(self.path, 0o600)
 
     def connect(self) -> sqlite3.Connection:
@@ -157,6 +160,28 @@ class ZoteroStateStore:
     def finish_run(self, summary: SyncSummary) -> None:
         with self.transaction() as connection:
             self.finish_run_in_transaction(connection, summary)
+
+    def fail_incomplete_runs(self) -> list[str]:
+        """Close runs abandoned by a process that no longer owns the source lock."""
+
+        finished_at = utc_now()
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT sync_id FROM sync_runs WHERE status = 'running' ORDER BY started_at"
+            ).fetchall()
+            sync_ids = [str(row["sync_id"]) for row in rows]
+            if sync_ids:
+                connection.execute(
+                    """
+                    UPDATE sync_runs SET
+                        finished_at = ?, status = 'failed',
+                        error_code = 'interrupted_or_crashed',
+                        error_message = 'Previous process exited before completing the run'
+                    WHERE status = 'running'
+                    """,
+                    (finished_at,),
+                )
+        return sync_ids
 
     def finish_run_in_transaction(
         self, connection: sqlite3.Connection, summary: SyncSummary

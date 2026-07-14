@@ -1,0 +1,23 @@
+[Unit]
+Description=KnowledgeHub Zotero source and RAG incremental ingest
+Requires=knowledgehub-zotero-sync.service
+After=knowledgehub-zotero-sync.service network-online.target
+
+[Service]
+Type=oneshot
+User=lengmo
+WorkingDirectory=/home/lengmo/KnowledgeHub
+EnvironmentFile=/etc/knowledgehub/rag.env
+ExecStart=/home/lengmo/anaconda3/bin/conda run -n rag --no-capture-output knowledgehub --config configs/rag/default.yaml rag ingest --incremental --gpu-mode dual --gpu-ids 0,1
+ExecStartPost=/home/lengmo/anaconda3/bin/conda run -n rag --no-capture-output knowledgehub --config configs/rag/default.yaml rag validate
+TimeoutStartSec=6h
+UMask=0077
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/lengmo/KnowledgeHub /home/lengmo/anaconda3 /data/KnowledgeHub/zotero
+ReadWritePaths=/data/KnowledgeHub/rag/zotero /data/KnowledgeHub/model-cache
+NoNewPrivileges=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=knowledgehub-zotero-rag
