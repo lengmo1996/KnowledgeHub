@@ -20,6 +20,7 @@ from knowledgehub.core.atomic import (
     safe_remove,
 )
 from knowledgehub.core.locking import FileLock
+from knowledgehub.manifests.catalog import append_delta_catalog
 from knowledgehub.manifests.writer import write_delta, write_json, write_snapshot
 
 from .attachments import (
@@ -896,6 +897,17 @@ class _PublicationSession:
         delta_file = staged_manifest / f"{sync_id}.jsonl"
         write_delta(delta_file, deltas)
         add(delta_file, manifests / "deltas" / f"{sync_id}.jsonl")
+        catalog_file = staged_manifest / "delta-catalog.jsonl"
+        append_delta_catalog(
+            current_path=manifests / "delta-catalog.jsonl",
+            output_path=catalog_file,
+            sync_id=sync_id,
+            from_version=int(summary.get("from_version") or 0),
+            target_version=int(summary.get("target_version") or 0),
+            staged_delta_path=delta_file,
+            row_count=len(deltas),
+        )
+        add(catalog_file, manifests / "delta-catalog.jsonl")
         summary_file = staged_manifest / "summary.json"
         write_json(summary_file, summary)
         add(summary_file, manifests / "summary.json")
@@ -1053,6 +1065,7 @@ def _allowed_publication_target(relative: Path, sync_id: str) -> bool:
         Path("manifests/documents.jsonl"),
         Path("manifests/collections.json"),
         Path("manifests/summary.json"),
+        Path("manifests/delta-catalog.jsonl"),
         Path(f"manifests/deltas/{sync_id}.jsonl"),
         Path(f"runs/{sync_id}/summary.json"),
         Path("state/zotero.sqlite3"),
