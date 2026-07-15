@@ -27,6 +27,9 @@ rag = [
   "transformers>=5.13,<6",
   "uvicorn>=0.51,<1",
 ]
+mcp = [
+  "mcp==1.28.1",
+]
 dev = [
   "mypy>=1.8,<2",
   "pytest>=7.4,<9",

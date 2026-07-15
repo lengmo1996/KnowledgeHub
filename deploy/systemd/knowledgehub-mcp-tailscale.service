@@ -1,0 +1,43 @@
+[Unit]
+Description=KnowledgeHub read-only MCP (Tailscale backend)
+After=network-online.target tailscaled.service qdrant.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=lengmo
+Group=lengmo
+WorkingDirectory=/home/lengmo/KnowledgeHub
+EnvironmentFile=/etc/knowledgehub/mcp-common.env
+EnvironmentFile=/etc/knowledgehub/mcp-tailscale.env
+ExecStart=/home/lengmo/anaconda3/envs/rag/bin/knowledgehub mcp --rag-config configs/rag/default.yaml serve --transport http
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+ReadOnlyPaths=/data/KnowledgeHub /etc/knowledgehub /home/lengmo/KnowledgeHub
+ReadWritePaths=/var/log/knowledgehub
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=knowledgehub-mcp-tailscale
+
+[Install]
+WantedBy=multi-user.target

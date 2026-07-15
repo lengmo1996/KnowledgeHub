@@ -1,0 +1,10 @@
+// Merge this fragment into the existing tailnet policy; do not replace it.
+{
+  "grants": [
+    {
+      "src": ["group:knowledgehub-mcp-clients"],
+      "dst": ["server-ai-00"],
+      "ip": ["tcp:443"]
+    }
+  ]
+}

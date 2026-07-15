@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ip -4 address show dev eno1 | grep -Fq '10.249.44.27/21'
+if ss -H -ltn 'sport = :8091' | grep -q .; then
+  echo 'TCP port 8091 is already occupied' >&2
+  exit 1
+fi
+ufw status | grep -Fq '8091/tcp on eno1'
+ufw status | grep -Fq '10.249.43.193'
+ufw status | grep -Fq 'KH-MCP-LAN-ALLOW'
+ufw status | grep -Fq 'KH-MCP-LAN-DENY'

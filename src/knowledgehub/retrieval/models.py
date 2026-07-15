@@ -19,8 +19,10 @@ class SearchRequest:
     doi: str | None = None
     document_id: str | None = None
     source: str | None = "zotero"
+    attachment_key: str | None = None
     use_reranker: bool = False
     reranker_profile: str = "off"
+    fallback_policy: str = "degrade"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -29,6 +31,8 @@ class SearchHit:
     score: float
     payload: Mapping[str, Any]
     rerank_score: float | None = None
+    dense_score: float | None = None
+    sparse_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -45,3 +49,6 @@ class SearchResponse:
     reranker_fallback: str | None
     hits: tuple[SearchHit, ...]
     timings: Mapping[str, float]
+    requested_mode: str = "hybrid"
+    degraded: bool = False
+    warnings: tuple[str, ...] = ()

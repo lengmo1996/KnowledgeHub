@@ -75,6 +75,10 @@ class EndpointPool:
         for state in self._states:
             state.client.close()
 
+    async def aclose(self) -> None:
+        for state in self._states:
+            await state.client.aclose()
+
     def embed(self, texts: Sequence[str]) -> EmbeddingBatchResult:
         errors: list[str] = []
         tried: set[str] = set()
@@ -89,6 +93,32 @@ class EndpointPool:
                 if len(tried) == len(self._states):
                     tried.clear()
                 continue
+            self._release(
+                state,
+                failed=False,
+                texts=result.text_count,
+                latency=result.latency_seconds,
+            )
+            return result
+        raise EmbeddingServiceError("all TEI endpoints failed: " + "; ".join(errors))
+
+    async def aembed(self, texts: Sequence[str]) -> EmbeddingBatchResult:
+        errors: list[str] = []
+        tried: set[str] = set()
+        for _ in range(max(self.max_attempts, len(self._states))):
+            state = self._acquire(exclude=tried)
+            tried.add(state.client.endpoint)
+            try:
+                result = await state.client.aembed(texts)
+            except EmbeddingServiceError as exc:
+                errors.append(str(exc))
+                self._release(state, failed=True, texts=0, latency=0.0)
+                if len(tried) == len(self._states):
+                    tried.clear()
+                continue
+            except BaseException:
+                self._release(state, failed=True, texts=0, latency=0.0)
+                raise
             self._release(
                 state,
                 failed=False,
@@ -114,6 +144,9 @@ class EndpointPool:
 
     def health(self) -> dict[str, bool]:
         return {value.client.endpoint: value.client.health() for value in self._states}
+
+    async def ahealth(self) -> dict[str, bool]:
+        return {value.client.endpoint: await value.client.ahealth() for value in self._states}
 
     def _acquire(self, *, exclude: set[str]) -> _EndpointState:
         with self._lock:

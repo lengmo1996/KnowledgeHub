@@ -38,8 +38,10 @@ class SearchBody(BaseModel):
     year_to: int | None = None
     doi: str | None = None
     document_id: str | None = None
+    attachment_key: str | None = None
     use_reranker: bool = False
     reranker_profile: str = "off"
+    fallback_policy: str = "degrade"
 
 
 def build_retrieval(config: RagConfig) -> RetrievalService:
