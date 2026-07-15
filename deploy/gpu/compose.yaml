@@ -5,6 +5,9 @@ x-app: &app
     context: ../..
     dockerfile: deploy/services/Dockerfile
   image: knowledgehub-rag-app:0.1.0
+  # GPU workloads are operator-controlled by default. CPU-only services may
+  # override this policy below.
+  restart: "no"
   env_file:
     - path: "${KH_ENV_FILE:-/etc/knowledgehub/rag.env}"
       required: false
@@ -26,6 +29,7 @@ x-gpu1: &gpu1
 services:
   embedding-gpu0:
     image: ghcr.io/huggingface/text-embeddings-inference:86-1.9
+    restart: "no"
     profiles: [embed-single, embed-dual, online-dual]
     command:
       - --model-id
@@ -54,6 +58,7 @@ services:
 
   embedding-gpu1:
     image: ghcr.io/huggingface/text-embeddings-inference:86-1.9
+    restart: "no"
     profiles: [embed-dual]
     command:
       - --model-id
@@ -121,9 +126,26 @@ services:
       resources:
         reservations:
           devices: [*gpu1]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, urllib.request;
+          request = urllib.request.Request('http://127.0.0.1:8081/health',
+          headers={'Authorization': 'Bearer ' + os.environ['KH_RERANKER_API_KEY']});
+          urllib.request.urlopen(request, timeout=5).read()
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 2m
 
   search-api:
     <<: *app
+    # The Search API is CPU-only. Docker may recover it at boot; unavailable
+    # embedding/reranker dependencies are reported as degraded at request time.
+    restart: unless-stopped
     profiles: [online-dual]
     command:
       - knowledgehub.services.search_api
@@ -139,3 +161,17 @@ services:
       KH_RERANKER_PROFILE: quality
     ports:
       - "127.0.0.1:${KH_SEARCH_PORT:-8090}:8090"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, urllib.request;
+          request = urllib.request.Request('http://127.0.0.1:8090/health',
+          headers={'Authorization': 'Bearer ' + os.environ['KH_SEARCH_API_KEY']});
+          urllib.request.urlopen(request, timeout=5).read()
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 15s

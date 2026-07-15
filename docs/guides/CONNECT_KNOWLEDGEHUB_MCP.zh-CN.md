@@ -59,17 +59,34 @@ sudo deploy/ufw/knowledgehub-mcp-ufw.sh verify
 sudo deploy/ufw/knowledgehub-mcp-ufw.sh rollback
 ```
 
-安装 unit、preflight 与 logrotate 后再启动。LAN 的 root preflight 只检查地址、空闲端口和精确 UFW
-规则；服务主体仍以 `lengmo` 且无 capabilities 运行。
+安装 Qdrant core unit、MCP unit、preflight 与 logrotate 后再启动。LAN 的 root
+preflight 只检查地址、空闲端口和精确 UFW 规则；服务主体仍以 `lengmo` 且无
+capabilities 运行。MCP 要求 `knowledgehub-rag-core.service` 先通过
+`docker compose up -d --wait qdrant`，不再依赖不存在的 `qdrant.service`。
 
 ```bash
 sudo install -m 0755 deploy/systemd/knowledgehub-mcp-lan-preflight \
   /usr/local/libexec/knowledgehub-mcp-lan-preflight
+sudo install -m 0644 \
+  deploy/systemd/knowledgehub-rag-core.service \
+  deploy/systemd/knowledgehub-rag-search-api.service \
+  deploy/systemd/knowledgehub-rag-online.service \
+  deploy/systemd/knowledgehub-rag-embed-dual.service \
+  /etc/systemd/system/
 sudo install -m 0644 deploy/systemd/knowledgehub-mcp-{lan,tailscale}.service /etc/systemd/system/
 sudo install -m 0644 deploy/logrotate/knowledgehub-mcp /etc/logrotate.d/knowledgehub-mcp
 sudo systemctl daemon-reload
+sudo systemctl enable --now \
+  knowledgehub-rag-core.service \
+  knowledgehub-rag-search-api.service
 sudo systemctl enable --now knowledgehub-mcp-lan knowledgehub-mcp-tailscale
 ```
+
+Search API 不使用 GPU，在 Qdrant core 之后自动启动。GPU embedding 和 quality
+reranker 保持按需；机器刚启动且 GPU workload 未启动时，MCP listener 的
+`/healthz` 仍可用，`/readyz` 会如实报告 embedding/reranker 降级或未就绪。需要
+完整在线检索时，手工启动 `knowledgehub-rag-online.service`，不需要重启 Search
+API 或 MCP。
 
 确认 backend ready 后，才配置 Serve。脚本会先核查 Funnel 状态，并要求精确确认字符串：
 

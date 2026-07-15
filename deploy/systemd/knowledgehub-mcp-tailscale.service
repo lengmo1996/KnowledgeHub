@@ -1,6 +1,7 @@
 [Unit]
 Description=KnowledgeHub read-only MCP (Tailscale backend)
-After=network-online.target tailscaled.service qdrant.service
+Requires=knowledgehub-rag-core.service
+After=network-online.target tailscaled.service knowledgehub-rag-core.service
 Wants=network-online.target tailscaled.service
 
 [Service]

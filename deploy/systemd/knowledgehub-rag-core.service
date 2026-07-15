@@ -1,0 +1,20 @@
+[Unit]
+Description=KnowledgeHub persistent RAG core (Qdrant only)
+Documentation=file:///home/lengmo/KnowledgeHub/docs/guides/BUILD_ZOTERO_RAG_DUAL_3090.zh-CN.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/lengmo/KnowledgeHub
+ExecStart=/usr/bin/docker compose -f deploy/qdrant/compose.yaml --profile core up -d --wait qdrant
+ExecStop=/usr/bin/docker compose -f deploy/qdrant/compose.yaml --profile core stop --timeout 60 qdrant
+TimeoutStartSec=10min
+TimeoutStopSec=2min
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

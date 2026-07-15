@@ -172,9 +172,11 @@ fingerprints, and `chunk_required` behavior.
 
 ## systemd timer example
 
-The repository includes an example oneshot service and 10-minute timer under
-`deploy/systemd/`. They are examples only: installation is never performed by
-the package or CLI.
+The repository includes example oneshot services, an hourly source timer,
+and a daily incremental RAG timer under `deploy/systemd/`. They are examples
+only: installation is never performed by the package or CLI. The complete
+step-by-step Chinese deployment procedure is in
+[the dual-3090 build guide](docs/guides/BUILD_ZOTERO_RAG_DUAL_3090.zh-CN.md#安装并启用-systemd-定时同步).
 
 The workstation examples use the requested `rag` conda environment. Before
 copying the units, adapt the user/group and these absolute paths if your
@@ -183,31 +185,96 @@ checkout differs:
 - checkout: `/home/lengmo/KnowledgeHub`;
 - conda launcher: `/home/lengmo/anaconda3/bin/conda` with environment `rag`;
 - configuration: `/etc/knowledgehub/zotero.yaml`;
-- environment file: `/etc/knowledgehub/zotero.env`;
+- environment files: `/etc/knowledgehub/zotero.env` and
+  `/etc/knowledgehub/rag.env`;
 - read-only local attachment mirror: `/data/KnowledgeHub/zotero_cache`;
 - writable data root: `/data/KnowledgeHub/zotero`.
 
-The environment file should be owned by the service account or root, have mode
-`0600`, and contain `ZOTERO_API_KEY`, `ZOTERO_WEBDAV_USERNAME`, and
-`ZOTERO_WEBDAV_PASSWORD`; do not put secrets in YAML or either unit.
+The secret environment files should be owned by root with mode `0600`.
+`zotero.env` must contain `ZOTERO_API_KEY`, `ZOTERO_WEBDAV_USERNAME`, and
+`ZOTERO_WEBDAV_PASSWORD`. An offline-only `rag.env` may be empty, but the
+authenticated reranker and Search API require independent, locally generated
+`KH_RERANKER_API_KEY` and `KH_SEARCH_API_KEY` values. Generate each with
+`openssl rand -hex 32`; these are not keys obtained from Zotero, Qwen, or a
+cloud provider. Do not put secrets in YAML or any unit.
 After reviewing the files, an administrator can install them explicitly:
 
 ```bash
-sudo install -d -m 0750 /etc/knowledgehub
-sudo install -m 0640 configs/sources/zotero.yaml /etc/knowledgehub/zotero.yaml
-sudo install -m 0600 .env.example /etc/knowledgehub/zotero.env
-sudoedit /etc/knowledgehub/zotero.env
-sudo install -m 0644 deploy/systemd/knowledgehub-zotero-cache-refresh.service /etc/systemd/system/
-sudo install -m 0644 deploy/systemd/knowledgehub-zotero-sync.service /etc/systemd/system/
-sudo install -m 0644 deploy/systemd/knowledgehub-zotero-sync.timer /etc/systemd/system/
-systemd-analyze verify /etc/systemd/system/knowledgehub-zotero-cache-refresh.service \
+sudo install -d -o root -g lengmo -m 0750 /etc/knowledgehub
+sudo install -o root -g lengmo -m 0640 \
+  configs/sources/zotero.yaml /etc/knowledgehub/zotero.yaml
+sudo install -o root -g root -m 0600 \
+  ~/.config/knowledgehub/zotero.env /etc/knowledgehub/zotero.env
+sudo touch /etc/knowledgehub/rag.env
+sudo chown root:root /etc/knowledgehub/rag.env
+sudo chmod 0600 /etc/knowledgehub/rag.env
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-zotero-cache-refresh.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-zotero-sync.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-zotero-sync.timer /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-zotero-rag-incremental.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-zotero-rag-incremental.timer /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-rag-core.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-rag-search-api.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-rag-online.service /etc/systemd/system/
+sudo install -o root -g root -m 0644 deploy/systemd/knowledgehub-rag-embed-dual.service /etc/systemd/system/
+sudo install -d -o root -g root -m 0755 /usr/local/libexec
+sudo install -o root -g root -m 0755 \
+  deploy/systemd/knowledgehub-rag-incremental-run \
+  deploy/systemd/knowledgehub-rag-incremental-with-retries \
+  /usr/local/libexec/
+sudo systemd-analyze verify \
+  /etc/systemd/system/knowledgehub-zotero-cache-refresh.service \
   /etc/systemd/system/knowledgehub-zotero-sync.service \
-  /etc/systemd/system/knowledgehub-zotero-sync.timer
+  /etc/systemd/system/knowledgehub-zotero-sync.timer \
+  /etc/systemd/system/knowledgehub-zotero-rag-incremental.service \
+  /etc/systemd/system/knowledgehub-zotero-rag-incremental.timer \
+  /etc/systemd/system/knowledgehub-rag-core.service \
+  /etc/systemd/system/knowledgehub-rag-search-api.service \
+  /etc/systemd/system/knowledgehub-rag-online.service \
+  /etc/systemd/system/knowledgehub-rag-embed-dual.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now knowledgehub-zotero-sync.timer
-systemctl list-timers knowledgehub-zotero-sync.timer
-journalctl -u knowledgehub-zotero-sync.service
+sudo systemctl enable --now \
+  knowledgehub-rag-core.service \
+  knowledgehub-rag-search-api.service
+sudo systemctl enable --now \
+  knowledgehub-zotero-sync.timer \
+  knowledgehub-zotero-rag-incremental.timer
+systemctl is-enabled knowledgehub-zotero-sync.timer knowledgehub-zotero-rag-incremental.timer
+systemctl is-active knowledgehub-zotero-sync.timer knowledgehub-zotero-rag-incremental.timer
+systemctl list-timers --all knowledgehub-zotero-sync.timer knowledgehub-zotero-rag-incremental.timer
 ```
+
+An unrelated diagnostic such as
+`/lib/systemd/system/snapd.service: ... Unknown key name 'RestartMode'` comes
+from the distribution's snapd unit, not these KnowledgeHub units. Diagnostics
+that name a `knowledgehub-*` unit must be fixed before enabling it.
+
+`enable` makes both timers start with `timers.target` at boot; `--now` starts
+waiting immediately. The oneshot services are not enabled themselves. Both
+timers use `Persistent=true`, so a schedule missed while the host was down is
+run once after the next activation.
+
+The boot policy starts the low-VRAM core and CPU-only Search API. Qdrant and
+Search API use `restart: unless-stopped`; the core unit waits for Qdrant before
+the Search API starts. GPU embeddings and rerankers explicitly use
+`restart: "no"`. Their interactive systemd workload units are static (no
+`[Install]`) and must be started manually:
+
+```bash
+sudo systemctl start knowledgehub-rag-online.service
+sudo systemctl stop knowledgehub-rag-online.service
+sudo systemctl start knowledgehub-rag-embed-dual.service
+sudo systemctl stop knowledgehub-rag-embed-dual.service
+```
+
+The two interactive GPU workload units conflict, so switching profiles
+releases the first workload before claiming VRAM for the second. The scheduled
+incremental RAG service independently inspects `nvidia-smi`, chooses dual,
+single GPU 0, or single GPU 1 from the available VRAM, starts temporary
+embedding containers, and releases only those containers afterward. A matching
+embedding container that is already running is reused and left running, so its
+own allocation is not mistaken for an unrelated busy GPU. A failed
+attempt is retried after four hours, at most twice (three total attempts).
 
 The refresh service combines `ProtectSystem=strict` with the cache as its only
 writable data path. The dependent source service sees that cache read-only and

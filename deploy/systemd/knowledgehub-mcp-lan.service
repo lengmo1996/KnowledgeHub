@@ -1,6 +1,7 @@
 [Unit]
 Description=KnowledgeHub read-only MCP (trusted LAN)
-After=network-online.target qdrant.service
+Requires=knowledgehub-rag-core.service
+After=network-online.target knowledgehub-rag-core.service
 Wants=network-online.target
 
 [Service]

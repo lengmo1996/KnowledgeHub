@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly NVIDIA_SMI_BIN="${KH_NVIDIA_SMI_BIN:-/usr/bin/nvidia-smi}"
+readonly DOCKER_BIN="${KH_DOCKER_BIN:-/usr/bin/docker}"
+readonly CONDA_BIN="${KH_CONDA_BIN:-/home/lengmo/anaconda3/bin/conda}"
+readonly MIN_FREE_MB="${KH_RAG_SCHEDULER_MIN_FREE_MB:-20000}"
+readonly MAX_USED_MB="${KH_RAG_SCHEDULER_MAX_USED_MB:-1024}"
+readonly CANDIDATE_IDS="${KH_RAG_SCHEDULER_GPU_IDS:-0,1}"
+readonly PROJECT_ROOT="/home/lengmo/KnowledgeHub"
+
+declare -a selected_ids=()
+declare -a selected_services=()
+declare -a managed_services=()
+declare -A gpu_free=()
+declare -A gpu_used=()
+declare -A running_services=()
+
+cd "$PROJECT_ROOT"
+# Only embedding services are started here; they do not need the root-only
+# Compose env file. RAG credentials already came from systemd EnvironmentFile.
+export KH_ENV_FILE=/dev/null
+readonly COMPOSE=(
+  "$DOCKER_BIN" compose
+  -f deploy/qdrant/compose.yaml
+  -f deploy/gpu/compose.yaml
+)
+
+log() {
+  printf 'knowledgehub-rag-scheduler: %s\n' "$*"
+}
+
+fail() {
+  log "$*"
+  exit 75
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+require_uint() {
+  [[ "$2" =~ ^[0-9]+$ ]] || fail "$1 must be a non-negative integer, got: $2"
+}
+
+inspect_gpus() {
+  local output index total used free
+  output=$("$NVIDIA_SMI_BIN" \
+    --query-gpu=index,memory.total,memory.used,memory.free \
+    --format=csv,noheader,nounits) || fail "nvidia-smi failed; retrying later"
+  while IFS=',' read -r index total used free; do
+    index=$(trim "$index")
+    total=$(trim "$total")
+    used=$(trim "$used")
+    free=$(trim "$free")
+    require_uint "GPU index" "$index"
+    require_uint "GPU total memory" "$total"
+    require_uint "GPU used memory" "$used"
+    require_uint "GPU free memory" "$free"
+    gpu_used["$index"]="$used"
+    gpu_free["$index"]="$free"
+    log "observed gpu=$index total_mb=$total used_mb=$used free_mb=$free"
+  done <<<"$output"
+}
+
+inspect_running_services() {
+  local output service
+  output=$("${COMPOSE[@]}" ps --status running --services) ||
+    fail "docker compose service inspection failed; retrying later"
+  while IFS= read -r service; do
+    [[ -n "$service" ]] || continue
+    running_services["$service"]=true
+    log "observed running compose service=$service"
+  done <<<"$output"
+}
+
+embedding_service_for_gpu() {
+  case "$1" in
+    0) printf 'embedding-gpu0' ;;
+    1) printf 'embedding-gpu1' ;;
+    *) fail "no embedding service is configured for GPU $1" ;;
+  esac
+}
+
+select_gpus() {
+  local candidate used free service
+  local -a candidates=()
+  IFS=',' read -r -a candidates <<<"$CANDIDATE_IDS"
+  for candidate in "${candidates[@]}"; do
+    candidate=$(trim "$candidate")
+    require_uint "candidate GPU ID" "$candidate"
+    [[ -n "${gpu_free[$candidate]+present}" ]] || continue
+    used="${gpu_used[$candidate]}"
+    free="${gpu_free[$candidate]}"
+    service="$(embedding_service_for_gpu "$candidate")"
+    if [[ -n "${running_services[$service]+present}" ]]; then
+      log "reusing $service on gpu=$candidate; no additional model allocation is needed"
+      selected_ids+=("$candidate")
+    elif ((used <= MAX_USED_MB && free >= MIN_FREE_MB)); then
+      selected_ids+=("$candidate")
+    else
+      log "rejecting gpu=$candidate: requires used_mb<=$MAX_USED_MB and free_mb>=$MIN_FREE_MB"
+    fi
+    ((${#selected_ids[@]} == 2)) && break
+  done
+  ((${#selected_ids[@]} > 0)) || fail "no GPU satisfies the VRAM policy; retrying in 4 hours"
+}
+
+selection_mode() {
+  if ((${#selected_ids[@]} == 2)); then
+    printf 'dual'
+  else
+    printf 'single'
+  fi
+}
+
+selection_ids() {
+  local joined
+  joined=$(IFS=,; printf '%s' "${selected_ids[*]}")
+  printf '%s' "$joined"
+}
+
+selection_endpoints() {
+  local id
+  local -a endpoints=()
+  for id in "${selected_ids[@]}"; do
+    case "$id" in
+      0) endpoints+=("http://127.0.0.1:8080") ;;
+      1) endpoints+=("http://127.0.0.1:8082") ;;
+      *) fail "no embedding service is configured for GPU $id" ;;
+    esac
+  done
+  local joined
+  joined=$(IFS=,; printf '%s' "${endpoints[*]}")
+  printf '%s' "$joined"
+}
+
+selection_services() {
+  local id
+  for id in "${selected_ids[@]}"; do
+    selected_services+=("$(embedding_service_for_gpu "$id")")
+  done
+}
+
+service_was_running() {
+  [[ -n "${running_services[$1]+present}" ]]
+}
+
+cleanup() {
+  if ((${#managed_services[@]} > 0)); then
+    log "stopping scheduler-owned embedding services: ${managed_services[*]}"
+    "${COMPOSE[@]}" --profile embed-single --profile embed-dual \
+      stop --timeout 120 "${managed_services[@]}" || true
+  fi
+}
+
+require_uint "KH_RAG_SCHEDULER_MIN_FREE_MB" "$MIN_FREE_MB"
+require_uint "KH_RAG_SCHEDULER_MAX_USED_MB" "$MAX_USED_MB"
+inspect_running_services
+inspect_gpus
+select_gpus
+selection_services
+
+readonly MODE="$(selection_mode)"
+readonly GPU_IDS="$(selection_ids)"
+readonly ENDPOINTS="$(selection_endpoints)"
+log "selected mode=$MODE gpu_ids=$GPU_IDS endpoints=$ENDPOINTS"
+
+if [[ "${1:-}" == "--select-only" ]]; then
+  exit 0
+fi
+
+for service in "${selected_services[@]}"; do
+  if ! service_was_running "$service"; then
+    managed_services+=("$service")
+  fi
+done
+trap cleanup EXIT
+
+"${COMPOSE[@]}" --profile embed-single --profile embed-dual \
+  up -d --wait "${selected_services[@]}"
+
+export KH_GPU_MODE="$MODE"
+export KH_GPU_IDS="$GPU_IDS"
+export KH_PARSE_GPU_IDS="$GPU_IDS"
+export KH_EMBED_ENDPOINTS="$ENDPOINTS"
+
+"$CONDA_BIN" run -n rag --no-capture-output \
+  knowledgehub --config configs/rag/default.yaml rag ingest \
+  --incremental --gpu-mode "$MODE" --gpu-ids "$GPU_IDS"
+"$CONDA_BIN" run -n rag --no-capture-output \
+  knowledgehub --config configs/rag/default.yaml rag validate --qdrant
+log "incremental ingest and validation completed successfully"

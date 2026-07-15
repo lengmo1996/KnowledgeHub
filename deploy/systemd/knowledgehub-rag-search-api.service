@@ -1,0 +1,19 @@
+[Unit]
+Description=KnowledgeHub persistent CPU Search API
+Documentation=file:///home/lengmo/KnowledgeHub/docs/guides/BUILD_ZOTERO_RAG_DUAL_3090.zh-CN.md
+Requires=docker.service knowledgehub-rag-core.service
+After=docker.service knowledgehub-rag-core.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/lengmo/KnowledgeHub
+ExecStart=/usr/bin/docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml --profile core --profile online-dual up -d --wait qdrant search-api
+ExecStop=/usr/bin/docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml --profile core --profile online-dual stop --timeout 60 search-api
+TimeoutStartSec=10min
+TimeoutStopSec=2min
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

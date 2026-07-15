@@ -337,7 +337,12 @@ knowledgehub --config /etc/knowledgehub/zotero.yaml zotero rebuild --yes
 `doctor` checks configuration, permissions, and remote access. `status` reports
 the latest state/run without syncing. `watch` uses a monotonic interval, invokes
 `sync_once()` each time, and exits cleanly on SIGINT/SIGTERM at a safe boundary.
-Production deployments should normally use the provided systemd timer.
+Production deployments should normally use the provided systemd timer. See the
+[step-by-step systemd deployment guide](../guides/BUILD_ZOTERO_RAG_DUAL_3090.zh-CN.md#安装并启用-systemd-定时同步)
+for installing `/etc/knowledgehub/zotero.yaml`, the two environment files, all
+five units, and both timers. Enabling the timers attaches them to
+`timers.target`, so they start at boot; the oneshot services themselves do not
+need to be enabled.
 
 `rebuild` is dry-run by default. `--yes` constructs and validates replacement
 state beneath the data root before using the same recoverable publication
@@ -365,4 +370,4 @@ writer from overlapping the normal source resolver.
 Zotero Streaming API support is intentionally absent in v1. Enabling it yields
 an explicit unsupported-feature diagnostic; no placeholder WebSocket state
 machine bypasses deleted-object handling, locking, version checks, or manifest
-publication. Use `watch` or the 10-minute systemd timer.
+publication. Use `watch` or the hourly systemd timer.

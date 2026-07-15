@@ -1,11 +1,11 @@
 [Unit]
-Description=Run KnowledgeHub Zotero sync every 10 minutes
+Description=Run KnowledgeHub Zotero sync hourly
 
 [Timer]
-OnCalendar=*:0/10
+OnCalendar=hourly
 Persistent=true
 AccuracySec=1min
-RandomizedDelaySec=30s
+RandomizedDelaySec=10min
 Unit=knowledgehub-zotero-sync.service
 
 [Install]

@@ -1,0 +1,18 @@
+[Unit]
+Description=KnowledgeHub on-demand dual-GPU embedding workload
+Documentation=file:///home/lengmo/KnowledgeHub/docs/guides/BUILD_ZOTERO_RAG_DUAL_3090.zh-CN.md
+Requires=docker.service knowledgehub-rag-core.service
+After=docker.service knowledgehub-rag-core.service
+Conflicts=knowledgehub-rag-online.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/lengmo/KnowledgeHub
+ExecStart=/usr/bin/docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml --profile core --profile embed-dual up -d --wait qdrant embedding-gpu0 embedding-gpu1
+ExecStop=/usr/bin/docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml --profile core --profile embed-dual stop --timeout 120 embedding-gpu1 embedding-gpu0
+TimeoutStartSec=30min
+TimeoutStopSec=3min
+
+# Intentionally no [Install]: starting this unit is an explicit VRAM claim.
+# Starting it stops the conflicting online workload first.

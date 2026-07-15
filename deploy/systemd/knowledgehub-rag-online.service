@@ -1,0 +1,18 @@
+[Unit]
+Description=KnowledgeHub on-demand online GPU inference workload
+Documentation=file:///home/lengmo/KnowledgeHub/docs/guides/BUILD_ZOTERO_RAG_DUAL_3090.zh-CN.md
+Requires=docker.service knowledgehub-rag-core.service
+After=docker.service knowledgehub-rag-core.service
+Conflicts=knowledgehub-rag-embed-dual.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/lengmo/KnowledgeHub
+ExecStart=/usr/bin/docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml --profile core --profile online-dual up -d --wait qdrant embedding-gpu0 reranker-quality-gpu1
+ExecStop=/usr/bin/docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml --profile core --profile online-dual stop --timeout 120 reranker-quality-gpu1 embedding-gpu0
+TimeoutStartSec=30min
+TimeoutStopSec=3min
+
+# Intentionally no [Install]: this GPU workload is manual and cannot be
+# enabled at boot. Use `systemctl start knowledgehub-rag-online.service`.

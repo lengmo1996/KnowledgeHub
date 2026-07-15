@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly ATTEMPT_BIN="${KH_RAG_ATTEMPT_BIN:-/usr/local/libexec/knowledgehub-rag-incremental-run}"
+readonly RETRY_DELAY_SECONDS="${KH_RAG_RETRY_DELAY_SECONDS:-14400}"
+readonly MAX_ATTEMPTS=3
+
+[[ "$RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]] || {
+  echo "knowledgehub-rag-retry: KH_RAG_RETRY_DELAY_SECONDS must be a non-negative integer" >&2
+  exit 2
+}
+
+last_status=1
+for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
+  echo "knowledgehub-rag-retry: starting attempt $attempt/$MAX_ATTEMPTS"
+  if "$ATTEMPT_BIN"; then
+    echo "knowledgehub-rag-retry: attempt $attempt succeeded"
+    exit 0
+  else
+    last_status=$?
+  fi
+  if ((attempt < MAX_ATTEMPTS)); then
+    echo "knowledgehub-rag-retry: attempt $attempt failed with status $last_status; " \
+      "retrying after $RETRY_DELAY_SECONDS seconds"
+    /bin/sleep "$RETRY_DELAY_SECONDS"
+  fi
+done
+
+echo "knowledgehub-rag-retry: all $MAX_ATTEMPTS attempts failed" >&2
+exit "$last_status"
