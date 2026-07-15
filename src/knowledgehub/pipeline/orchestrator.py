@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable, Mapping, Sequence
@@ -247,7 +248,11 @@ class PipelineOrchestrator:
         attachment_key: str | None = None,
         force: bool = False,
     ) -> PipelineSummary:
-        documents = self._active_documents(
+        # Parse is a source-facing stage and must be able to introduce ready
+        # snapshot documents into pipeline state without a prior monolithic
+        # ingest.  Embed remains state-facing because it requires canonical
+        # chunk artifacts produced by this stage.
+        documents = self.source.load_snapshot(
             limit=limit, document_id=document_id, attachment_key=attachment_key
         )
         return self._run_documents(documents, mode="parse", force=force, parse_only=True)
@@ -598,9 +603,25 @@ class PipelineOrchestrator:
             raw_chunks = read_chunks_parquet(path)
             chunks = [ChunkRecord(**value) for value in raw_chunks]
             dense: list[Sequence[float]] = []
-            for offset in range(0, len(chunks), self.config.embedding_batch_size):
-                batch = chunks[offset : offset + self.config.embedding_batch_size]
-                dense.extend(pool.embed([value.text for value in batch]).vectors)
+            text_batches = [
+                [value.text for value in chunks[offset : offset + self.config.embedding_batch_size]]
+                for offset in range(0, len(chunks), self.config.embedding_batch_size)
+            ]
+            # Qdrant remains single-coordinator, while the two TEI replicas may
+            # process independent batches concurrently. executor.map preserves
+            # batch order, so vector-to-chunk alignment stays deterministic.
+            embedding_workers = min(2, len(self.gpu_plan.embedding_endpoints), len(text_batches))
+            if embedding_workers > 1:
+                with ThreadPoolExecutor(
+                    max_workers=embedding_workers,
+                    thread_name_prefix="tei-embed",
+                ) as executor:
+                    results = executor.map(pool.embed, text_batches)
+                    for result in results:
+                        dense.extend(result.vectors)
+            else:
+                for batch in text_batches:
+                    dense.extend(pool.embed(batch).vectors)
             sparse = sparse_encoder.encode([value.text for value in chunks])
             index.replace_document(document.document_id, chunks, dense, sparse)
             embedding_fingerprint = document_embedding_fingerprint(
@@ -717,6 +738,7 @@ class PipelineOrchestrator:
                 normalize=self.config.embedding_normalize,
                 timeout_seconds=self.config.embedding_timeout_seconds,
                 strategy=self.config.embedding_request_strategy,
+                api_key=self.config.embedding_api_key.get_secret_value(),
             )
         return self._pool
 
@@ -731,6 +753,7 @@ class PipelineOrchestrator:
                 self.config.qdrant_url,
                 self.config.qdrant_collection,
                 dense_dim=self.config.embedding_dim,
+                upsert_batch_size=self.config.qdrant_upsert_batch_size,
             )
         return self._index
 

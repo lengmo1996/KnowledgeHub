@@ -24,14 +24,28 @@ def test_parser_exposes_all_zotero_commands_and_sync_default() -> None:
     sync = parser.parse_args(["zotero", "sync"])
     commands = [
         parser.parse_args(["zotero", command]).zotero_command
-        for command in ("resolve-attachments", "validate", "doctor", "status", "rebuild")
+        for command in (
+            "resolve-attachments",
+            "refresh-cache",
+            "validate",
+            "doctor",
+            "status",
+            "rebuild",
+        )
     ]
 
     assert sync.source == "zotero"
     assert sync.zotero_command == "sync"
     assert sync.once is False
     assert sync.full is False
-    assert commands == ["resolve-attachments", "validate", "doctor", "status", "rebuild"]
+    assert commands == [
+        "resolve-attachments",
+        "refresh-cache",
+        "validate",
+        "doctor",
+        "status",
+        "rebuild",
+    ]
     with pytest.raises(SystemExit):
         parser.parse_args(["zotero", "sync", "--once", "--full"])
 
@@ -103,6 +117,58 @@ def test_resolve_attachments_cli_dispatches_local_operation(
     )
     assert json.loads(capsys.readouterr().out)["mode"] == "attachments"
     assert seen == {"limit": 20, "attachment_keys": ["ABCD1234"]}
+
+
+def test_refresh_cache_cli_dispatches_and_supports_local_adoption(
+    monkeypatch,
+    capsys,
+    zotero_config_factory,
+) -> None:
+    import knowledgehub.sources.zotero.cli as cli
+
+    config = zotero_config_factory()
+    _patch_config(monkeypatch, config)
+    seen: dict[str, object] = {}
+
+    class Summary:
+        def to_dict(self):
+            return {"status": "success", "downloaded": 2}
+
+    def fake_refresh(received, *, prune, adopt_existing):
+        seen.update(config=received, prune=prune, adopt_existing=adopt_existing)
+        return Summary()
+
+    monkeypatch.setattr(cli, "refresh_webdav_cache", fake_refresh)
+
+    assert main(["zotero", "refresh-cache", "--no-prune", "--adopt-existing"]) == 0
+    assert json.loads(capsys.readouterr().out)["downloaded"] == 2
+    assert seen == {"config": config, "prune": False, "adopt_existing": True}
+
+
+def test_refresh_cache_cli_honors_configured_seed_policy(
+    monkeypatch,
+    capsys,
+    zotero_config_factory,
+) -> None:
+    import knowledgehub.sources.zotero.cli as cli
+
+    config = zotero_config_factory(webdav_adopt_existing=True, webdav_prune=False)
+    _patch_config(monkeypatch, config)
+    seen: dict[str, object] = {}
+
+    class Summary:
+        def to_dict(self):
+            return {"status": "success"}
+
+    def fake_refresh(received, *, prune, adopt_existing):
+        seen.update(config=received, prune=prune, adopt_existing=adopt_existing)
+        return Summary()
+
+    monkeypatch.setattr(cli, "refresh_webdav_cache", fake_refresh)
+
+    assert main(["zotero", "refresh-cache"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "success"
+    assert seen == {"config": config, "prune": False, "adopt_existing": True}
 
 
 def test_validate_cli_uses_report_validity_as_exit_status(

@@ -27,6 +27,7 @@ class QdrantIndex:
         dimension: int | None = None,
         *,
         dense_dim: int | None = None,
+        upsert_batch_size: int = 32,
     ) -> None:
         from qdrant_client import QdrantClient
 
@@ -34,7 +35,10 @@ class QdrantIndex:
         resolved_dimension = dimension if dimension is not None else dense_dim
         if resolved_dimension is None or resolved_dimension <= 0:
             raise ValueError("dense vector dimension must be positive")
+        if upsert_batch_size <= 0:
+            raise ValueError("upsert batch size must be positive")
         self.dimension = resolved_dimension
+        self.upsert_batch_size = upsert_batch_size
         self.client: Any = QdrantClient(url=url, timeout=60)
 
     def ensure_collection(self) -> None:
@@ -123,8 +127,12 @@ class QdrantIndex:
                     payload=payload,
                 )
             )
-        if points:
-            self.client.upsert(collection_name=self.collection, points=points, wait=True)
+        for offset in range(0, len(points), self.upsert_batch_size):
+            self.client.upsert(
+                collection_name=self.collection,
+                points=points[offset : offset + self.upsert_batch_size],
+                wait=True,
+            )
 
     def update_document_payload(self, document_id: str, payload: Mapping[str, Any]) -> None:
         from qdrant_client import models

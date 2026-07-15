@@ -6,6 +6,7 @@ rag:
   qdrant_url: http://127.0.0.1:6333
   qdrant_collection: zotero_papers_qwen3_4b_1024_v2
   qdrant_smoke_collection: zotero_papers_qwen3_4b_1024_smoke
+  qdrant_upsert_batch_size: 32
   model_cache_dir: /data/KnowledgeHub/model-cache
   gpu_mode: auto
   gpu_ids: [0, 1]

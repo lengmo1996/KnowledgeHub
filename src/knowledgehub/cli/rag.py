@@ -379,15 +379,48 @@ def _selection(parser: argparse.ArgumentParser) -> None:
 
 
 def _pipeline_fingerprints(orchestrator: PipelineOrchestrator) -> str:
-    rows = orchestrator.state.documents(active_only=True)
+    documents = orchestrator.state.documents(active_only=True)
+    connection = orchestrator.state.connect()
+    try:
+        chunk_rows = connection.execute(
+            """
+            SELECT c.document_id, c.chunk_id, c.chunk_index, c.text_sha256,
+                   c.chunk_fingerprint, c.page_start, c.page_end,
+                   c.section_path_json
+            FROM chunks AS c
+            JOIN pipeline_documents AS d ON d.document_id = c.document_id
+            WHERE c.active=1 AND d.source_status='ready'
+            ORDER BY c.document_id, c.chunk_index, c.chunk_id
+            """
+        ).fetchall()
+    finally:
+        connection.close()
     return sha256_json(
         {
-            document_id: {
-                "chunk": row.get("chunk_fingerprint"),
-                "embedding": row.get("embedding_fingerprint"),
-                "parse": row.get("parse_fingerprint"),
-            }
-            for document_id, row in sorted(rows.items())
+            "documents": {
+                document_id: {
+                    "chunk": row.get("chunk_fingerprint"),
+                    "embedding": row.get("embedding_fingerprint"),
+                    "parse": row.get("parse_fingerprint"),
+                }
+                for document_id, row in sorted(documents.items())
+            },
+            # Stage fingerprints describe configuration and invalidation.  Include
+            # the canonical chunk projection as well so a benchmark cannot report
+            # consistency when two workers produced different text or structure.
+            "chunks": [
+                {
+                    "document_id": row["document_id"],
+                    "chunk_id": row["chunk_id"],
+                    "chunk_index": row["chunk_index"],
+                    "text_sha256": row["text_sha256"],
+                    "chunk_fingerprint": row["chunk_fingerprint"],
+                    "page_start": row["page_start"],
+                    "page_end": row["page_end"],
+                    "section_path_json": row["section_path_json"],
+                }
+                for row in chunk_rows
+            ],
         }
     )
 

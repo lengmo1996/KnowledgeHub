@@ -185,6 +185,16 @@ def test_full_ingest_is_idempotent_and_metadata_only_updates_payload(tmp_path: P
     assert pool.texts == 1
 
 
+def test_parse_command_selects_ready_snapshot_without_prior_ingest(tmp_path: Path) -> None:
+    orchestrator, runner, _pool, _index, _snapshot_path, _pdf = _harness(tmp_path)
+    assert orchestrator.state.documents() == {}
+    summary = orchestrator.parse_pending(limit=20)
+    orchestrator.close()
+    assert summary.status == "success"
+    assert summary.selected == 1 and summary.parsed == 1
+    assert runner.calls == [["zotero:user:1:item:ATT:0"]]
+
+
 def test_content_change_invalidates_and_prune_deletes(tmp_path: Path) -> None:
     orchestrator, _runner, _, index, snapshot, pdf = _harness(tmp_path)
     orchestrator.ingest_full()

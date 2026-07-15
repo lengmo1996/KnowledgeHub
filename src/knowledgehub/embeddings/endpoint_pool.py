@@ -55,6 +55,7 @@ class EndpointPool:
         normalize: bool,
         timeout_seconds: float,
         strategy: str = "least_outstanding",
+        api_key: str = "",
     ) -> "EndpointPool":
         return cls(
             [
@@ -63,6 +64,7 @@ class EndpointPool:
                     output_dim=output_dim,
                     normalize=normalize,
                     timeout_seconds=timeout_seconds,
+                    api_key=api_key,
                 )
                 for endpoint in endpoints
             ],

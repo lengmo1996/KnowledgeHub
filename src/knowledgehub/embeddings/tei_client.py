@@ -23,6 +23,7 @@ class TEIClient:
         output_dim: int,
         normalize: bool = True,
         timeout_seconds: float = 120.0,
+        api_key: str = "",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
@@ -31,6 +32,7 @@ class TEIClient:
         self._client = httpx.Client(
             base_url=self.endpoint,
             timeout=timeout_seconds,
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
             transport=transport,
             follow_redirects=False,
         )

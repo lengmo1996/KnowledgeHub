@@ -8,16 +8,17 @@ Before=knowledgehub-zotero-sync.service
 [Service]
 Type=oneshot
 User=lengmo
-ExecStartPre=/usr/bin/mkdir -p /data/KnowledgeHub/zotero_cache
-ExecStart=/usr/bin/rclone sync nutstore:/zotero /data/KnowledgeHub/zotero_cache --transfers 1 --checkers 2 --tpslimit 1 --tpslimit-burst 1 --low-level-retries 3 --retries 3 --retries-sleep 60s --delete-after --log-level INFO
-TimeoutStartSec=2h
+WorkingDirectory=/home/lengmo/KnowledgeHub
+EnvironmentFile=/etc/knowledgehub/zotero.env
+ExecStart=/home/lengmo/anaconda3/bin/conda run -n rag --no-capture-output knowledgehub --config /etc/knowledgehub/zotero.yaml zotero refresh-cache
+TimeoutStartSec=8h
 UMask=0077
 
-# Only the disposable local mirror is writable. The remote is the rclone
-# source argument, so sync can never delete from nutstore:/zotero.
+# Only the disposable local mirror is writable. PROPFIND/GET are the only
+# remote methods; pruning targets supported ZIP/PROP names in the local mirror.
 ProtectSystem=strict
 ProtectHome=read-only
-ReadOnlyPaths=/home/lengmo/.config/rclone
+ReadOnlyPaths=/home/lengmo/KnowledgeHub /home/lengmo/anaconda3
 ReadWritePaths=/data/KnowledgeHub/zotero_cache
 PrivateTmp=true
 PrivateDevices=true

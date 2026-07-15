@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+import warnings
 from typing import Any, Iterable, Mapping
 
 from knowledgehub.chunking.fingerprints import document_chunk_fingerprint
@@ -44,15 +45,27 @@ class StructuralChunker:
         if parsed.native is not None:
             self._load()
             assert self._chunker is not None
-            for value in self._chunker.chunk(dl_doc=parsed.native):
-                text = str(value.text or "").strip()
-                if text:
-                    meta = (
-                        value.meta.model_dump(mode="json")
-                        if hasattr(value.meta, "model_dump")
-                        else {}
-                    )
-                    rows.append((text, meta if isinstance(meta, Mapping) else {}))
+            with warnings.catch_warnings():
+                # HybridChunker falls back to an oversize chunk when headings alone
+                # exceed the token budget.  The warning includes the complete
+                # heading text and can flood journals with document content; the
+                # fallback is deterministic and remains represented in the output.
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"Headers and captions for this chunk are longer.*",
+                    category=UserWarning,
+                    module=r"docling_core\.transforms\.chunker\.hybrid_chunker",
+                )
+                values = self._chunker.chunk(dl_doc=parsed.native)
+                for value in values:
+                    text = str(value.text or "").strip()
+                    if text:
+                        meta = (
+                            value.meta.model_dump(mode="json")
+                            if hasattr(value.meta, "model_dump")
+                            else {}
+                        )
+                        rows.append((text, meta if isinstance(meta, Mapping) else {}))
         else:
             rows.extend(self._fallback_chunks(parsed.markdown))
 

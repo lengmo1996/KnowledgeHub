@@ -5,8 +5,23 @@ library_type: user
 # Required for group libraries. May be null for a user library.
 library_id: null
 
-# Local mirror refreshed from nutstore:/zotero. KnowledgeHub itself opens it
-# read-only; rclone is the only writer.
+# Nutstore paginates large PROPFIND listings with Link: rel="next". The
+# refresh-cache command follows every page; credentials stay in the environment.
+webdav_url: https://dav.jianguoyun.com/dav/zotero/
+webdav_page_limit: 10000
+# Nutstore enforces both burst and sustained quotas. Keep request starts slow,
+# and cool down for 15 minutes after 429/503 before retrying.
+webdav_request_interval_seconds: 2.0
+webdav_retry_cooldown_seconds: 900
+webdav_max_retry_delay_seconds: 1800
+# This mirror was seeded out-of-band from the same WebDAV object set. Adopt
+# unindexed regular files only when their advertised remote size matches.
+webdav_adopt_existing: true
+# Preserve Windows-seeded objects even when the current remote listing does
+# not contain them. Attachment resolution may still consume those local files.
+webdav_prune: false
+# Local disposable mirror written only by refresh-cache. Attachment resolution
+# opens it read-only after the refresh command exits.
 webdav_dir: /data/KnowledgeHub/zotero_cache
 # SQLite, extracted PDFs, manifests, runs, and logs are written only here.
 data_dir: /data/KnowledgeHub/zotero

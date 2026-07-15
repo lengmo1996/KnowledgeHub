@@ -24,6 +24,22 @@ def test_tei_truncates_mrl_and_renormalizes() -> None:
     client.close()
 
 
+def test_tei_api_key_is_only_sent_as_bearer_header() -> None:
+    observed: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["authorization"] = request.headers.get("authorization", "")
+        assert "secret-value" not in str(request.url)
+        return httpx.Response(200, json=[[1.0, 0.0]], request=request)
+
+    client = TEIClient(
+        "http://tei", output_dim=2, api_key="secret-value", transport=httpx.MockTransport(handler)
+    )
+    client.embed(["paper"])
+    client.close()
+    assert observed == {"authorization": "Bearer secret-value"}
+
+
 class _FakeEndpoint:
     def __init__(self, endpoint: str, *, fail: bool = False) -> None:
         self.endpoint = endpoint

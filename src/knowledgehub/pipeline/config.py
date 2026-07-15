@@ -109,6 +109,7 @@ class RagConfig:
     qdrant_url: str = "http://127.0.0.1:6333"
     qdrant_collection: str = "zotero_papers_qwen3_4b_1024_v2"
     qdrant_smoke_collection: str = "zotero_papers_qwen3_4b_1024_smoke"
+    qdrant_upsert_batch_size: int = 32
     model_cache_dir: Path = Path("/data/KnowledgeHub/model-cache")
     gpu_mode: str = GPUMode.AUTO.value
     gpu_ids: tuple[int, ...] = (0, 1)
@@ -136,6 +137,7 @@ class RagConfig:
     )
     embedding_request_strategy: str = "least_outstanding"
     embedding_timeout_seconds: float = 120.0
+    embedding_api_key: SecretValue = field(default_factory=SecretValue)
     reranker_profile: str = RerankerProfile.OFF.value
     reranker_url: str = "http://127.0.0.1:8081"
     reranker_gpu_id: int = 1
@@ -194,6 +196,8 @@ class RagConfig:
             raise RagConfigError("v1 supports exactly one parser worker per GPU")
         if self.chunk_max_tokens <= 0 or self.embedding_dim <= 0:
             raise RagConfigError("chunk and embedding dimensions must be positive")
+        if self.qdrant_upsert_batch_size <= 0:
+            raise RagConfigError("Qdrant upsert batch size must be positive")
         if self.embedding_dim > 2560:
             raise RagConfigError("embedding_dim exceeds Qwen3-Embedding-4B output dimension")
         if self.embedding_request_strategy not in {"round_robin", "least_outstanding"}:
@@ -308,6 +312,7 @@ _ENV_FIELDS = {
     "KH_QDRANT_URL": "qdrant_url",
     "KH_QDRANT_COLLECTION": "qdrant_collection",
     "KH_QDRANT_SMOKE_COLLECTION": "qdrant_smoke_collection",
+    "KH_QDRANT_UPSERT_BATCH_SIZE": "qdrant_upsert_batch_size",
     "KH_MODEL_CACHE_DIR": "model_cache_dir",
     "KH_GPU_MODE": "gpu_mode",
     "KH_GPU_IDS": "gpu_ids",
@@ -332,6 +337,7 @@ _ENV_FIELDS = {
     "KH_EMBED_ENDPOINTS": "embedding_endpoints",
     "KH_EMBED_REQUEST_STRATEGY": "embedding_request_strategy",
     "KH_EMBEDDING_TIMEOUT_SECONDS": "embedding_timeout_seconds",
+    "KH_EMBEDDING_API_KEY": "embedding_api_key",
     "KH_RERANKER_PROFILE": "reranker_profile",
     "KH_RERANKER_URL": "reranker_url",
     "KH_RERANK_GPU_ID": "reranker_gpu_id",
@@ -361,6 +367,7 @@ _INT_FIELDS = {
     "embedding_max_length",
     "embedding_batch_size",
     "embedding_max_batch_tokens",
+    "qdrant_upsert_batch_size",
     "reranker_gpu_id",
     "reranker_max_length",
     "reranker_batch_size",
@@ -382,7 +389,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 def _convert(name: str, value: Any) -> Any:
-    if name in {"search_api_key", "reranker_api_key"}:
+    if name in {"embedding_api_key", "search_api_key", "reranker_api_key"}:
         return value if isinstance(value, SecretValue) else SecretValue(str(value).strip())
     if name in _PATH_FIELDS:
         return Path(str(value)).expanduser()

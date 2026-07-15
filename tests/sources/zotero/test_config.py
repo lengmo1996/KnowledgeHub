@@ -69,6 +69,23 @@ def test_secret_never_appears_in_string_or_repr() -> None:
     [
         ({"ZOTERO_MAX_RETRIES": "7"}, "max_retries", 7),
         ({"ZOTERO_HTTP_TIMEOUT_SECONDS": "2.5"}, "http_timeout_seconds", 2.5),
+        (
+            {"ZOTERO_WEBDAV_REQUEST_INTERVAL_SECONDS": "0.75"},
+            "webdav_request_interval_seconds",
+            0.75,
+        ),
+        (
+            {"ZOTERO_WEBDAV_RETRY_COOLDOWN_SECONDS": "900"},
+            "webdav_retry_cooldown_seconds",
+            900.0,
+        ),
+        (
+            {"ZOTERO_WEBDAV_MAX_RETRY_DELAY_SECONDS": "1800"},
+            "webdav_max_retry_delay_seconds",
+            1800.0,
+        ),
+        ({"ZOTERO_WEBDAV_ADOPT_EXISTING": "true"}, "webdav_adopt_existing", True),
+        ({"ZOTERO_WEBDAV_PRUNE": "false"}, "webdav_prune", False),
         ({"ZOTERO_ENABLE_STREAMING": "off"}, "enable_streaming", False),
         (
             {"ZOTERO_METADATA_CHANGES_REQUIRE_CHUNKING": "1"},
@@ -76,6 +93,7 @@ def test_secret_never_appears_in_string_or_repr() -> None:
             True,
         ),
         ({"ZOTERO_WEBDAV_DIR": "~/zotero"}, "webdav_dir", Path("~/zotero").expanduser()),
+        ({"ZOTERO_WEBDAV_PAGE_LIMIT": "42"}, "webdav_page_limit", 42),
     ],
 )
 def test_environment_values_are_typed(
@@ -105,6 +123,34 @@ def test_environment_values_are_typed(
         ("zip_stability_check_count: 1", "config_error", "at least two"),
         ("poll_interval_seconds: 0", "config_error", "must be positive"),
         ("enable_streaming: true", "streaming_not_implemented", "not implemented"),
+        ("webdav_url: http://dav.example/zotero/", "config_error", "HTTPS collection"),
+        ("webdav_url: https://dav.example/zotero", "config_error", "ending in /"),
+        ("webdav_page_limit: 0", "config_error", "PAGE_LIMIT must be positive"),
+        (
+            "webdav_request_interval_seconds: -.inf",
+            "config_error",
+            "REQUEST_INTERVAL_SECONDS must be non-negative",
+        ),
+        (
+            "webdav_request_interval_seconds: -0.1",
+            "config_error",
+            "REQUEST_INTERVAL_SECONDS must be non-negative",
+        ),
+        (
+            "webdav_retry_cooldown_seconds: -0.1",
+            "config_error",
+            "RETRY_COOLDOWN_SECONDS must be non-negative",
+        ),
+        (
+            "webdav_max_retry_delay_seconds: -0.1",
+            "config_error",
+            "MAX_RETRY_DELAY_SECONDS must be non-negative",
+        ),
+        (
+            "webdav_retry_cooldown_seconds: 61\nwebdav_max_retry_delay_seconds: 60",
+            "config_error",
+            "RETRY_COOLDOWN_SECONDS must not exceed",
+        ),
     ],
 )
 def test_static_validation_rejects_unsafe_or_unsupported_values(
@@ -127,6 +173,8 @@ def test_static_validation_rejects_unsafe_or_unsupported_values(
         ("api_concurrency: many", "must be an integer"),
         ("http_timeout_seconds: soon", "must be numeric"),
         ("attachment_scan_on_304: perhaps", "must be a boolean"),
+        ("webdav_adopt_existing: perhaps", "must be a boolean"),
+        ("webdav_prune: perhaps", "must be a boolean"),
     ],
 )
 def test_conversion_errors_are_classified(
@@ -228,3 +276,17 @@ def test_user_library_id_can_be_resolved_without_mutating_original() -> None:
 
     assert config.library_id is None
     assert resolved.library_id == 123
+
+
+def test_webdav_credentials_are_typed_as_redacted_secrets() -> None:
+    config = ZoteroConfig.load(
+        environ={
+            "ZOTERO_API_KEY": "api-secret",
+            "ZOTERO_WEBDAV_USERNAME": "person@example.com",
+            "ZOTERO_WEBDAV_PASSWORD": "application-password",
+        }
+    )
+
+    assert config.webdav_username.get_secret_value() == "person@example.com"
+    assert config.webdav_password.get_secret_value() == "application-password"
+    assert "application-password" not in repr(config.webdav_password)

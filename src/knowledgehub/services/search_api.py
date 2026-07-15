@@ -49,6 +49,7 @@ def build_retrieval(config: RagConfig) -> RetrievalService:
         normalize=config.embedding_normalize,
         timeout_seconds=config.embedding_timeout_seconds,
         strategy=config.embedding_request_strategy,
+        api_key=config.embedding_api_key.get_secret_value(),
     )
     reranker = None
     if config.reranker_profile != "off":

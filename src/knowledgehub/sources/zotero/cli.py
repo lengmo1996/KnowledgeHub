@@ -21,12 +21,13 @@ from .rebuild import rebuild_source
 from .state import ZoteroStateStore
 from .sync import resolve_attachments_once, sync_once
 from .validation import validate_source
+from .webdav_cache import refresh_webdav_cache
 
 LOGGER = logging.getLogger(__name__)
 
 
 def add_zotero_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = subparsers.add_parser("zotero", help="Read-only Zotero Web API + WebDAV source")
+    parser = subparsers.add_parser("zotero", help="Zotero source and paginated WebDAV cache")
     commands = parser.add_subparsers(dest="zotero_command", required=True)
 
     sync_parser = commands.add_parser("sync", help="Synchronize Zotero metadata and attachments")
@@ -50,6 +51,19 @@ def add_zotero_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         help="Resolve only this attachment key (repeatable)",
     )
     commands.add_parser("validate", help="Validate SQLite, relationships, cache and manifests")
+    refresh = commands.add_parser(
+        "refresh-cache", help="Refresh the local mirror through Nutstore WebDAV pagination"
+    )
+    refresh.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Keep supported local ZIP/PROP files that are absent from the remote listing",
+    )
+    refresh.add_argument(
+        "--adopt-existing",
+        action="store_true",
+        help="Trust unindexed local ZIP/PROP files whose size matches the remote listing",
+    )
     commands.add_parser("doctor", help="Check configuration, paths, API key and library permission")
     status = commands.add_parser("status", help="Show local source state and recent runs")
     status.add_argument("--runs", type=int, default=10, help="Number of recent runs to show")
@@ -64,7 +78,11 @@ def run_zotero_command(args: argparse.Namespace) -> int:
         config = _load_config(args.config)
         configure_logging(
             level=config.log_level,
-            secrets=(config.api_key.get_secret_value(),),
+            secrets=(
+                config.api_key.get_secret_value(),
+                config.webdav_username.get_secret_value(),
+                config.webdav_password.get_secret_value(),
+            ),
         )
         command = args.zotero_command
         needs_runtime = command in {
@@ -79,7 +97,11 @@ def run_zotero_command(args: argparse.Namespace) -> int:
             configure_logging(
                 level=config.log_level,
                 data_dir=config.data_dir,
-                secrets=(config.api_key.get_secret_value(),),
+                secrets=(
+                    config.api_key.get_secret_value(),
+                    config.webdav_username.get_secret_value(),
+                    config.webdav_password.get_secret_value(),
+                ),
             )
         if command == "sync":
             mode = SyncMode.FULL if args.full else SyncMode.INCREMENTAL
@@ -91,6 +113,15 @@ def run_zotero_command(args: argparse.Namespace) -> int:
                     config,
                     limit=args.limit,
                     attachment_keys=args.attachment_keys,
+                ).to_dict()
+            )
+            return 0
+        if command == "refresh-cache":
+            _emit(
+                refresh_webdav_cache(
+                    config,
+                    prune=config.webdav_prune and not args.no_prune,
+                    adopt_existing=args.adopt_existing or config.webdav_adopt_existing,
                 ).to_dict()
             )
             return 0

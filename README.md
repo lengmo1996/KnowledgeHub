@@ -7,12 +7,13 @@ manifests. The RAG layer consumes only that contract and implements Docling or
 PyMuPDF parsing, canonical Parquet chunks, explicit single/dual GPU scheduling,
 TEI embeddings, BM25, Qdrant RRF and optional Qwen3 reranking.
 
-The source has two independent, read-only inputs:
+The source consumes two independent inputs:
 
 - Zotero Web API v3 supplies metadata, relationships, collections, versions,
   and explicit deletion events. The client exposes GET operations only.
-- `ZOTERO_WEBDAV_DIR` supplies `<attachment_key>.zip` and `.prop` files. ZIPs
-  are opened read-only and are never renamed, deleted, or extracted in place.
+- Nutstore WebDAV supplies attachment archives. `zotero refresh-cache` follows
+  every Nutstore `Link: rel="next"` page into `ZOTERO_WEBDAV_DIR`; the attachment
+  resolver then opens `<attachment_key>.zip` and `.prop` files read-only.
 
 SQLite state, extracted PDFs, manifests, run summaries, and logs are written
 only beneath `ZOTERO_DATA_DIR`. KnowledgeHub does not read `zotero.sqlite`, use
@@ -47,24 +48,25 @@ For development checks, install the development extra:
 
 Runtime data belongs outside the Git checkout. Create the two roots with
 permissions appropriate for the account that will run KnowledgeHub; that
-account needs read access to the WebDAV root and read/write access to the data
-root.
+account needs write access to the disposable WebDAV cache and data root.
 
 ```text
-/data/KnowledgeHub/zotero_cache/ # local rclone mirror, read-only to KnowledgeHub
+/data/KnowledgeHub/zotero_cache/ # disposable paginated WebDAV mirror
 /data/KnowledgeHub/zotero/   # KnowledgeHub-owned, writable state
 ```
 
 ## Configure
 
 Start from [`configs/sources/zotero.yaml`](configs/sources/zotero.yaml) and
-provide the API key in the process environment. `.env` files are not loaded
-automatically; [`.env.example`](.env.example) is only a list of supported
-variables.
+provide the API key and Nutstore application credentials in the process
+environment. `.env` files are not loaded automatically;
+[`.env.example`](.env.example) is only a list of supported variables.
 
 ```bash
 export ZOTERO_API_KEY='replace-with-a-read-capable-key'
 export ZOTERO_LIBRARY_TYPE=user
+export ZOTERO_WEBDAV_USERNAME='your-nutstore-account'
+export ZOTERO_WEBDAV_PASSWORD='your-nutstore-application-password'
 # ZOTERO_LIBRARY_ID may be omitted for a user library.
 ```
 
@@ -77,7 +79,8 @@ For a group library, set `ZOTERO_LIBRARY_TYPE=group` and the numeric
 
 The `/keys/current` check verifies the key owner and target-library read
 permission before synchronization. Secrets are passed only in the
-`Zotero-API-Key` request header and are redacted from logs and CLI output.
+`Zotero-API-Key` header or WebDAV Basic authentication and are redacted from
+logs and CLI output.
 
 ## Run
 
@@ -88,6 +91,10 @@ failure, `2` for invalid arguments/configuration, and `3` when the sync lock is
 already held.
 
 ```bash
+# Fully enumerate every Nutstore WebDAV page and incrementally refresh the
+# local mirror. Pruning affects only local ZIP/PROP files after a full listing.
+knowledgehub --config configs/sources/zotero.yaml zotero refresh-cache
+
 # Verify configuration, paths, and API access without syncing.
 knowledgehub --config configs/sources/zotero.yaml zotero doctor
 
@@ -120,7 +127,8 @@ All synchronization modes call the same `sync_once()` service. A process lock
 at `state/zotero.lock` prevents manual, watch, and timer runs from modifying the
 same data directory concurrently. `ZOTERO_ENABLE_STREAMING=true` is rejected
 with an explicit diagnostic in v1: streaming is not implemented. Use polling
-or the systemd timer.
+or the systemd timer. Cache refresh has a separate lock in
+`ZOTERO_WEBDAV_DIR` so overlapping refresh commands fail safely.
 
 ## Runtime layout
 
@@ -180,7 +188,8 @@ checkout differs:
 - writable data root: `/data/KnowledgeHub/zotero`.
 
 The environment file should be owned by the service account or root, have mode
-`0600`, and contain `ZOTERO_API_KEY=...`; do not put the key in either unit.
+`0600`, and contain `ZOTERO_API_KEY`, `ZOTERO_WEBDAV_USERNAME`, and
+`ZOTERO_WEBDAV_PASSWORD`; do not put secrets in YAML or either unit.
 After reviewing the files, an administrator can install them explicitly:
 
 ```bash
@@ -200,17 +209,19 @@ systemctl list-timers knowledgehub-zotero-sync.timer
 journalctl -u knowledgehub-zotero-sync.service
 ```
 
-The service combines `ProtectSystem=strict` with an explicit
-`ReadOnlyPaths=/data/KnowledgeHub/zotero_cache` and
-`ReadWritePaths=/data/KnowledgeHub/zotero`. The application independently
-enforces the same path boundary and never targets the WebDAV root for cleanup.
+The refresh service combines `ProtectSystem=strict` with the cache as its only
+writable data path. The dependent source service sees that cache read-only and
+writes only `ZOTERO_DATA_DIR`. Both commands independently enforce that the two
+roots do not overlap.
 
 The sync unit requires
-`knowledgehub-zotero-cache-refresh.service`. That prerequisite runs a bounded
-`rclone sync nutstore:/zotero /data/KnowledgeHub/zotero_cache` first, so its
-initial invocation populates the complete mirror and later invocations transfer
-only remote changes. Direct CLI runs assume the mirror has already been
-refreshed.
+`knowledgehub-zotero-cache-refresh.service`. That prerequisite runs
+`zotero refresh-cache`, follows Nutstore's WebDAV `rel="next"` markers until
+exhausted, and only then prunes stale local ZIP/PROP files. The first invocation
+populates the mirror and checkpoints each completed download so an interrupted
+initial refresh can resume safely. Later invocations reuse the authoritative
+remote-property index and download only changed objects. Direct source syncs
+assume the mirror has already been refreshed.
 
 ## Develop and verify
 

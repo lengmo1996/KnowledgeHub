@@ -6,19 +6,21 @@ chunking, embeddings, indexing, or retrieval.
 
 ## Trust and write boundaries
 
-The source deliberately separates two read-only inputs from one writable
-runtime root:
+The source deliberately separates remote inputs, a disposable mirror, and the
+durable runtime root:
 
 | Channel | Purpose | Access |
 | --- | --- | --- |
 | Zotero Web API v3 | Metadata, versions, permissions, collections, and deletions | HTTPS GET only |
-| `ZOTERO_WEBDAV_DIR` | Local rclone mirror containing `<attachment_key>.zip` and `.prop` files | Local read only |
+| Nutstore WebDAV | Paginated remote `<attachment_key>.zip` and `.prop` objects | HTTPS PROPFIND/GET only |
+| `ZOTERO_WEBDAV_DIR` | Disposable local attachment mirror | Written by `refresh-cache`; read-only during source sync |
 | `ZOTERO_DATA_DIR` | SQLite state, extraction cache, manifests, runs, and logs | Local read/write |
 
 KnowledgeHub never calls the Zotero Local API, reads `zotero.sqlite`, requires
 Zotero Desktop to be running, downloads PDFs from Zotero's API, or sends
-create/update/delete requests. It never writes, renames, removes, or extracts
-files in the WebDAV root.
+create/update/delete requests. The cache refresh never sends a remote write
+method. Attachment resolution never writes, renames, removes, or extracts in
+place inside the local mirror.
 
 An attachment is associated by its Zotero attachment item key. Titles, parent
 keys, and PDF filenames are not used to infer archive identity. A single bad or
@@ -39,6 +41,15 @@ wins. A source YAML may contain a direct mapping (as in
 | `library_type` | `ZOTERO_LIBRARY_TYPE` | `user` | `user` or `group` |
 | `library_id` | `ZOTERO_LIBRARY_ID` | none | Numeric; required for group, optional for user |
 | `api_base_url` | `ZOTERO_API_BASE_URL` | `https://api.zotero.org` | HTTPS URL; alternate hosts are primarily for tests |
+| `webdav_url` | `ZOTERO_WEBDAV_URL` | `https://dav.jianguoyun.com/dav/zotero/` | HTTPS collection URL ending in `/`; no embedded credentials/query |
+| `webdav_username` | `ZOTERO_WEBDAV_USERNAME` | none | Required by `refresh-cache`; environment only in production |
+| `webdav_password` | `ZOTERO_WEBDAV_PASSWORD` | none | Nutstore application password required by `refresh-cache` |
+| `webdav_page_limit` | `ZOTERO_WEBDAV_PAGE_LIMIT` | `10000` | Positive cycle/runaway guard for PROPFIND pagination |
+| `webdav_request_interval_seconds` | `ZOTERO_WEBDAV_REQUEST_INTERVAL_SECONDS` | `2.0` | Minimum interval between WebDAV request starts; `0` disables pacing |
+| `webdav_retry_cooldown_seconds` | `ZOTERO_WEBDAV_RETRY_COOLDOWN_SECONDS` | `900` | Minimum whole-client cooldown after WebDAV HTTP 429/503 |
+| `webdav_max_retry_delay_seconds` | `ZOTERO_WEBDAV_MAX_RETRY_DELAY_SECONDS` | `1800` | Maximum server-directed or exponential WebDAV retry delay |
+| `webdav_adopt_existing` | `ZOTERO_WEBDAV_ADOPT_EXISTING` | `false` | Trust unindexed local regular files when remote size matches; intended for an out-of-band seed |
+| `webdav_prune` | `ZOTERO_WEBDAV_PRUNE` | `true` | Delete supported local objects absent from the completed remote listing |
 | `webdav_dir` | `ZOTERO_WEBDAV_DIR` | `/data/KnowledgeHub/zotero_cache` | Existing readable local mirror |
 | `data_dir` | `ZOTERO_DATA_DIR` | `/data/KnowledgeHub/zotero` | Writable runtime root, separate from WebDAV |
 | `http_timeout_seconds` | `ZOTERO_HTTP_TIMEOUT_SECONDS` | `30` | Positive request timeout |
@@ -63,8 +74,9 @@ permission for that group.
 
 Permission failures are distinguished as `invalid_api_key`,
 `missing_library_permission`, `user_id_mismatch`, or
-`unsupported_library_type`; transport failures are reported as
-`network_error`. Logs never include the API key or sensitive headers.
+`unsupported_library_type`; WebDAV authentication failures use
+`webdav_auth_error`, and transport failures use `network_error`. Logs never
+include API/WebDAV secrets or sensitive headers.
 
 ## Remote synchronization
 
@@ -132,31 +144,74 @@ useful for smoke tests and large local mirrors; repeating a bounded run is
 idempotent.
 
 The production input is a real local mirror, not the `/data/Nutstore` FUSE
-mount. Refresh it with:
+mount and not rclone's incomplete first page. Refresh it with:
 
 ```bash
-rclone sync nutstore:/zotero /data/KnowledgeHub/zotero_cache \
-  --transfers 1 --checkers 2 \
-  --tpslimit 1 --tpslimit-burst 1 \
-  --low-level-retries 3 --retries 3 --retries-sleep 60s \
-  --delete-after
+knowledgehub --config configs/sources/zotero.yaml zotero refresh-cache
 ```
 
-`deploy/systemd/knowledgehub-zotero-cache-refresh.service` contains this
-operation. `knowledgehub-zotero-sync.service` requires it, so the first service
-start creates and fully populates the mirror, while later timer runs transfer
-only files whose rclone size/modtime comparison changed. A manual first sync is
-therefore optional. `--delete-after` only removes stale files from the local,
-disposable mirror; the remote is always the source argument and is never a
-deletion target.
+The command sends `PROPFIND` with `Depth: 1`, parses each DAV multistatus body,
+and follows same-origin, same-collection `Link: ...; rel="next"` URLs containing
+the Nutstore `mk` marker until no next link remains. Cycles, conflicting links,
+cross-origin URLs, malformed XML, unsafe filenames, and page-limit overflow
+fail the run. Only direct `<attachment_key>.zip` and `.prop` children enter the
+mirror.
+
+All PROPFIND, GET, and retry request starts are paced by
+`webdav_request_interval_seconds` (2 seconds by default). HTTP 429 and 503
+responses impose at least `webdav_retry_cooldown_seconds` of whole-client
+cooldown before retrying. `Backoff` and `Retry-After` are still honored up to
+`webdav_max_retry_delay_seconds`. Request duration and retry backoff count
+toward the start interval, so a longer response or backoff does not add a
+redundant delay.
+
+An out-of-band cache seed copied from another machine can be adopted with
+`--adopt-existing` or `webdav_adopt_existing: true`. Adoption is limited to
+previously unindexed, non-symlink regular files whose local size exactly matches
+the WebDAV listing. Files with known but changed remote metadata are always
+downloaded. Because WebDAV exposes no portable content checksum, adoption is an
+explicit trust decision; use it only when the seed came from the same object
+set. The final summary reports adopted objects separately from downloaded,
+resumed, and unchanged objects.
+
+Set `webdav_prune: false` (or pass `--no-prune`) when the local cache contains
+objects copied from another machine that are intentionally absent from the
+current WebDAV listing. The normal mirror default remains pruning enabled.
+
+After listing, `refresh-cache` logs the total remote-object and page counts.
+Each completed object then emits `current/total` progress plus cumulative
+`downloaded`, `resumed`, and `unchanged` counts. These progress records use
+stderr logging; the final machine-readable summary remains a single JSON value
+on stdout.
+
+Downloads stream to mode-0600 sibling temporary files, validate the advertised
+size, fsync, and atomically replace their destination. A local index records
+remote size, ETag, and modification time so later runs skip unchanged files.
+After every successful download, a separate mode-0600 progress index is
+atomically checkpointed. An interrupted run therefore resumes files whose
+checkpointed remote metadata still matches the next complete listing and whose
+local file is still a regular file of the advertised size. The success output
+reports these as `resumed`; changed, missing, or invalid files are downloaded
+again. A later listing or download error reports `checkpointed_objects` and the
+progress-index path when resumable work exists. The authoritative index is
+committed—and stale local ZIP/PROP files are pruned—only after a complete
+listing and all required downloads succeed, then the progress index is removed.
+`--no-prune` keeps stale local files for diagnostics. Neither mode can delete a
+remote object.
+
+`deploy/systemd/knowledgehub-zotero-cache-refresh.service` runs this command.
+`knowledgehub-zotero-sync.service` requires it, so the initial service start
+fills the complete mirror and later starts download only changed objects. A
+separate cache lock rejects overlapping refresh processes.
 
 The source manifest must not be the sole input to this refresh. It is produced
 after attachment resolution, and Zotero API metadata cannot reveal a ZIP that
-was replaced in WebDAV without a metadata change. rclone's remote listing is
-the authoritative transfer detector; the delta catalog remains the downstream
-exactly-once control plane. After the mirror refresh, a normal incremental
-source run detects changed archive stat/hash values, publishes the resulting
-document delta, and leaves `library_version` governed only by the Zotero API.
+was replaced in WebDAV without a metadata change. The complete paginated remote
+listing is the authoritative transfer detector; the delta catalog remains the
+downstream exactly-once control plane. After the mirror refresh, a normal
+incremental source run detects changed archive stat/hash values, publishes the
+resulting document delta, and leaves `library_version` governed only by the
+Zotero API.
 
 If Nutstore returns `BlockedTemporarily`, the refresh service fails and the
 dependent source sync does not start. Allow a cooldown and restart the service;
@@ -300,10 +355,10 @@ It checks:
 - WebDAV read-only expectations and data-root writability;
 - an interrupted publish intent that requires recovery.
 
-Because another process (such as Nutstore) owns the WebDAV mirror,
-KnowledgeHub can prove that it opened source files read-only and detect stat
-changes while processing; it cannot attribute legitimate changes between runs
-to a particular external process.
+Because `refresh-cache` and source sync are separate locked processes,
+KnowledgeHub can prove that the resolver opened source files read-only and
+detect stat changes while processing. The systemd dependency keeps the mirror
+writer from overlapping the normal source resolver.
 
 ## Streaming status
 

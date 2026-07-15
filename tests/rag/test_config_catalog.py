@@ -22,6 +22,23 @@ def test_default_config_parses_yaml_off_and_environment_override(tmp_path: Path)
     assert config.reranker_profile == "off"
     assert config.data_dir == tmp_path
     assert config.gpu_mode == "cpu"
+    assert config.qdrant_upsert_batch_size == 32
+
+
+def test_qdrant_upsert_batch_size_can_be_overridden_and_must_be_positive(
+    tmp_path: Path,
+) -> None:
+    config = RagConfig.load(
+        Path("configs/rag/default.yaml"),
+        environ={
+            "KH_RAG_DATA_DIR": str(tmp_path),
+            "KH_QDRANT_UPSERT_BATCH_SIZE": "16",
+        },
+    )
+    assert config.qdrant_upsert_batch_size == 16
+
+    with pytest.raises(ValueError, match="upsert batch size must be positive"):
+        RagConfig(qdrant_upsert_batch_size=0).validate()
 
 
 def test_dual_gpu_plan_records_physical_identity(tmp_path: Path) -> None:

@@ -43,6 +43,15 @@ class ZoteroConfig:
     library_type: str = "user"
     library_id: int | None = None
     api_base_url: str = "https://api.zotero.org"
+    webdav_url: str = "https://dav.jianguoyun.com/dav/zotero/"
+    webdav_username: SecretValue = field(default_factory=lambda: SecretValue(""))
+    webdav_password: SecretValue = field(default_factory=lambda: SecretValue(""))
+    webdav_page_limit: int = 10_000
+    webdav_request_interval_seconds: float = 2.0
+    webdav_retry_cooldown_seconds: float = 900.0
+    webdav_max_retry_delay_seconds: float = 1800.0
+    webdav_adopt_existing: bool = False
+    webdav_prune: bool = True
     webdav_dir: Path = Path("/data/KnowledgeHub/zotero_cache")
     data_dir: Path = Path("/data/KnowledgeHub/zotero")
     http_timeout_seconds: float = 30.0
@@ -126,10 +135,60 @@ class ZoteroConfig:
                 "config_error",
                 "ZOTERO_API_BASE_URL must be an HTTPS origin without credentials or query",
             )
+        try:
+            webdav = urlparse(self.webdav_url)
+            webdav_port = webdav.port
+        except ValueError as exc:
+            raise ZoteroError(
+                "config_error", "ZOTERO_WEBDAV_URL must be a valid HTTPS collection URL"
+            ) from exc
+        if (
+            webdav.scheme != "https"
+            or not webdav.netloc
+            or webdav.username
+            or webdav.password
+            or webdav.query
+            or webdav.fragment
+            or not webdav.path.endswith("/")
+            or (webdav_port is not None and not 1 <= webdav_port <= 65535)
+        ):
+            raise ZoteroError(
+                "config_error",
+                "ZOTERO_WEBDAV_URL must be an HTTPS collection URL ending in / without credentials or query",
+            )
         if not math.isfinite(self.http_timeout_seconds) or self.http_timeout_seconds <= 0:
             raise ZoteroError("config_error", "HTTP timeout must be positive")
         if self.max_retries < 0 or self.sync_max_retries < 0:
             raise ZoteroError("config_error", "Retry counts cannot be negative")
+        if self.webdav_page_limit <= 0:
+            raise ZoteroError("config_error", "ZOTERO_WEBDAV_PAGE_LIMIT must be positive")
+        if (
+            not math.isfinite(self.webdav_request_interval_seconds)
+            or self.webdav_request_interval_seconds < 0
+        ):
+            raise ZoteroError(
+                "config_error", "ZOTERO_WEBDAV_REQUEST_INTERVAL_SECONDS must be non-negative"
+            )
+        if (
+            not math.isfinite(self.webdav_retry_cooldown_seconds)
+            or self.webdav_retry_cooldown_seconds < 0
+        ):
+            raise ZoteroError(
+                "config_error", "ZOTERO_WEBDAV_RETRY_COOLDOWN_SECONDS must be non-negative"
+            )
+        if (
+            not math.isfinite(self.webdav_max_retry_delay_seconds)
+            or self.webdav_max_retry_delay_seconds < 0
+        ):
+            raise ZoteroError(
+                "config_error", "ZOTERO_WEBDAV_MAX_RETRY_DELAY_SECONDS must be non-negative"
+            )
+        if self.webdav_retry_cooldown_seconds > self.webdav_max_retry_delay_seconds:
+            raise ZoteroError(
+                "config_error",
+                "ZOTERO_WEBDAV_RETRY_COOLDOWN_SECONDS must not exceed "
+                "ZOTERO_WEBDAV_MAX_RETRY_DELAY_SECONDS",
+            )
         if not 1 <= self.api_concurrency <= 4:
             raise ZoteroError("config_error", "ZOTERO_API_CONCURRENCY must be between 1 and 4")
         if (
@@ -158,6 +217,55 @@ class ZoteroConfig:
                 "streaming_not_implemented", "Zotero Streaming API is not implemented in v1"
             )
         return self
+
+    def require_webdav_credentials(self) -> None:
+        """Validate secrets required only by the remote cache refresh command."""
+
+        if not self.webdav_username or not self.webdav_password:
+            raise ZoteroError(
+                "config_error",
+                "ZOTERO_WEBDAV_USERNAME and ZOTERO_WEBDAV_PASSWORD are required for refresh-cache",
+            )
+
+    def prepare_webdav_cache(self) -> Path:
+        """Create and validate the writable, disposable WebDAV mirror root."""
+
+        cache = self.webdav_dir.expanduser()
+        try:
+            if os.path.lexists(cache) and (
+                cache.is_symlink() or not stat.S_ISDIR(cache.lstat().st_mode)
+            ):
+                raise ZoteroError("config_error", f"WebDAV cache is not a real directory: {cache}")
+            cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+            cache_real = cache.resolve(strict=True)
+            data_real = self.data_dir.expanduser().resolve(strict=False)
+            if (
+                cache_real == data_real
+                or cache_real in data_real.parents
+                or data_real in cache_real.parents
+            ):
+                raise ZoteroError(
+                    "config_error",
+                    "ZOTERO_DATA_DIR must not overlap the writable WebDAV cache",
+                )
+            probe = cache / f".knowledgehub-cache-write-probe-{uuid.uuid4().hex}"
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_CLOEXEC"):
+                flags |= os.O_CLOEXEC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(probe, flags, 0o600)
+            try:
+                os.write(descriptor, b"ok")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            probe.unlink()
+            return cache_real
+        except OSError as exc:
+            raise ZoteroError(
+                "config_error", f"WebDAV cache directory is not writable: {cache}"
+            ) from exc
 
     def prepare_runtime(self) -> None:
         webdav = self.webdav_dir.expanduser()
@@ -255,6 +363,15 @@ _ENV_FIELDS = {
     "ZOTERO_LIBRARY_TYPE": "library_type",
     "ZOTERO_LIBRARY_ID": "library_id",
     "ZOTERO_API_BASE_URL": "api_base_url",
+    "ZOTERO_WEBDAV_URL": "webdav_url",
+    "ZOTERO_WEBDAV_USERNAME": "webdav_username",
+    "ZOTERO_WEBDAV_PASSWORD": "webdav_password",
+    "ZOTERO_WEBDAV_PAGE_LIMIT": "webdav_page_limit",
+    "ZOTERO_WEBDAV_REQUEST_INTERVAL_SECONDS": "webdav_request_interval_seconds",
+    "ZOTERO_WEBDAV_RETRY_COOLDOWN_SECONDS": "webdav_retry_cooldown_seconds",
+    "ZOTERO_WEBDAV_MAX_RETRY_DELAY_SECONDS": "webdav_max_retry_delay_seconds",
+    "ZOTERO_WEBDAV_ADOPT_EXISTING": "webdav_adopt_existing",
+    "ZOTERO_WEBDAV_PRUNE": "webdav_prune",
     "ZOTERO_WEBDAV_DIR": "webdav_dir",
     "ZOTERO_DATA_DIR": "data_dir",
     "ZOTERO_HTTP_TIMEOUT_SECONDS": "http_timeout_seconds",
@@ -289,7 +406,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 
 def _convert(name: str, value: Any) -> Any:
-    if name == "api_key":
+    if name in {"api_key", "webdav_username", "webdav_password"}:
         return value if isinstance(value, SecretValue) else SecretValue(str(value).strip())
     if name in {"webdav_dir", "data_dir"}:
         return Path(str(value)).expanduser()
@@ -300,6 +417,7 @@ def _convert(name: str, value: Any) -> Any:
         "zip_stability_check_count",
         "poll_interval_seconds",
         "mapping_validation_sample_size",
+        "webdav_page_limit",
     }:
         try:
             return int(value)
@@ -312,12 +430,24 @@ def _convert(name: str, value: Any) -> Any:
             return int(value)
         except (TypeError, ValueError) as exc:
             raise ZoteroError("config_error", "library_id must be numeric") from exc
-    if name in {"http_timeout_seconds", "zip_stability_interval_seconds"}:
+    if name in {
+        "http_timeout_seconds",
+        "webdav_request_interval_seconds",
+        "webdav_retry_cooldown_seconds",
+        "webdav_max_retry_delay_seconds",
+        "zip_stability_interval_seconds",
+    }:
         try:
             return float(value)
         except (TypeError, ValueError) as exc:
             raise ZoteroError("config_error", f"{name} must be numeric") from exc
-    if name in {"enable_streaming", "attachment_scan_on_304", "metadata_changes_require_chunking"}:
+    if name in {
+        "enable_streaming",
+        "attachment_scan_on_304",
+        "metadata_changes_require_chunking",
+        "webdav_adopt_existing",
+        "webdav_prune",
+    }:
         if isinstance(value, bool):
             return value
         normalized = str(value).strip().lower()
@@ -328,4 +458,4 @@ def _convert(name: str, value: Any) -> Any:
         raise ZoteroError("config_error", f"{name} must be a boolean")
     if name == "log_level":
         return str(value).strip().upper()
-    return str(value).strip() if name in {"library_type", "api_base_url"} else value
+    return str(value).strip() if name in {"library_type", "api_base_url", "webdav_url"} else value

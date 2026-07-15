@@ -14,8 +14,8 @@ ExecStart=/home/lengmo/anaconda3/bin/conda run -n rag --no-capture-output knowle
 TimeoutStartSec=30min
 UMask=0077
 
-# The local attachment mirror is immutable to KnowledgeHub. Its prerequisite
-# rclone service is the only writer and completes before this unit starts.
+# The source resolver sees an immutable attachment mirror. Its prerequisite
+# paginated WebDAV refresh is the only writer and exits before this unit starts.
 ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/home/lengmo/KnowledgeHub /home/lengmo/anaconda3
