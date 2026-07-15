@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import multiprocessing as mp
 import os
 import queue
@@ -15,6 +16,8 @@ from knowledgehub.chunking.structural import StructuralChunker
 from knowledgehub.pipeline.artifacts import write_chunks_parquet, write_parsed
 from knowledgehub.pipeline.config import GPUPlan, RagConfig
 from knowledgehub.pipeline.models import ChunkRecord, SourceDocument
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,9 +146,18 @@ def _worker_main(
             parser = primary
             try:
                 parsed = parser.parse(document)
-            except Exception:
+            except Exception as exc:
                 if not config.parser_fallback:
                     raise
+                _LOG.warning(
+                    "Primary parser %s rejected document %s (attachment %s); "
+                    "retrying the entire document with %s: %s",
+                    primary.name,
+                    document.document_id,
+                    document.attachment_key,
+                    config.parser_fallback,
+                    exc,
+                )
                 if fallback is None:
                     fallback = create_parser(
                         config.parser_fallback,

@@ -9,6 +9,33 @@ from knowledgehub.chunking.fingerprints import document_parse_fingerprint
 from knowledgehub.pipeline.models import ParsedDocument, SourceDocument
 
 
+class DoclingConversionError(RuntimeError):
+    """Raised when Docling returns anything other than a clean conversion."""
+
+
+def _conversion_error(result: Any) -> str | None:
+    status_value = getattr(result, "status", None)
+    status = getattr(status_value, "value", status_value)
+    normalized_status = str(status).strip().lower() if status is not None else "missing"
+    errors = tuple(getattr(result, "errors", None) or ())
+    if normalized_status == "success" and not errors:
+        return None
+
+    details: list[str] = []
+    for error in errors[:3]:
+        page_no = getattr(error, "page_no", None)
+        message = str(getattr(error, "error_message", None) or error)
+        prefix = f"page {page_no}: " if page_no is not None else ""
+        details.append(f"{prefix}{message}")
+    if len(errors) > len(details):
+        details.append(f"and {len(errors) - len(details)} more error(s)")
+
+    summary = f"Docling conversion was not clean (status={normalized_status}, errors={len(errors)})"
+    if details:
+        summary += ": " + "; ".join(details)
+    return summary
+
+
 def _dump(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         result = value.model_dump(mode="json")
@@ -53,6 +80,8 @@ class DoclingParser:
 
     def parse(self, document: SourceDocument) -> ParsedDocument:
         result = self._converter.convert(document.pdf_path)
+        if error := _conversion_error(result):
+            raise DoclingConversionError(error)
         native = result.document
         structured = _dump(native)
         markdown = native.export_to_markdown()
