@@ -183,6 +183,7 @@ def test_gpu_scheduler_defers_when_both_cards_are_busy(tmp_path: Path) -> None:
         **os.environ,
         "KH_NVIDIA_SMI_BIN": str(nvidia_smi),
         "KH_DOCKER_BIN": str(docker),
+        "KH_CURL_BIN": "/bin/true",
     }
 
     completed = subprocess.run(
@@ -212,6 +213,7 @@ def test_gpu_scheduler_reuses_running_target_embedding_container(tmp_path: Path)
         **os.environ,
         "KH_NVIDIA_SMI_BIN": str(nvidia_smi),
         "KH_DOCKER_BIN": str(docker),
+        "KH_CURL_BIN": "/bin/true",
     }
 
     completed = subprocess.run(
@@ -223,5 +225,93 @@ def test_gpu_scheduler_reuses_running_target_embedding_container(tmp_path: Path)
     )
 
     assert completed.returncode == 0
-    assert "reusing embedding-gpu0 on gpu=0" in completed.stdout
+    assert "reusing healthy embedding-gpu0 on gpu=0" in completed.stdout
     assert "mode=single gpu_ids=0" in completed.stdout
+
+
+def test_gpu_scheduler_does_not_compose_up_reused_container(tmp_path: Path) -> None:
+    nvidia_smi = tmp_path / "nvidia-smi"
+    nvidia_smi.write_text(
+        "#!/bin/sh\nprintf '%s' '0, 24576, 9000, 15576\n1, 24576, 8000, 16576\n'\n",
+        encoding="utf-8",
+    )
+    nvidia_smi.chmod(0o755)
+    docker_log = tmp_path / "docker.log"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >>'{docker_log}'\n"
+        'case "$*" in\n'
+        "  *' ps --status running --services') printf '%s\\n' embedding-gpu0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    env = {
+        **os.environ,
+        "KH_NVIDIA_SMI_BIN": str(nvidia_smi),
+        "KH_DOCKER_BIN": str(docker),
+        "KH_CURL_BIN": "/bin/true",
+        "KH_CONDA_BIN": "/bin/true",
+    }
+
+    completed = subprocess.run(
+        ["bash", str(ROOT / "deploy/systemd/knowledgehub-rag-incremental-run")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "skipping compose up" in completed.stdout
+    docker_calls = docker_log.read_text(encoding="utf-8")
+    assert " ps --status running --services" in docker_calls
+    assert " up " not in docker_calls
+    assert " stop " not in docker_calls
+
+
+def test_gpu_scheduler_starts_and_cleans_only_missing_container(tmp_path: Path) -> None:
+    nvidia_smi = tmp_path / "nvidia-smi"
+    nvidia_smi.write_text(
+        "#!/bin/sh\nprintf '%s' '0, 24576, 9000, 15576\n1, 24576, 20, 24556\n'\n",
+        encoding="utf-8",
+    )
+    nvidia_smi.chmod(0o755)
+    docker_log = tmp_path / "docker.log"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >>'{docker_log}'\n"
+        'case "$*" in\n'
+        "  *' ps --status running --services') printf '%s\\n' embedding-gpu0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    env = {
+        **os.environ,
+        "KH_NVIDIA_SMI_BIN": str(nvidia_smi),
+        "KH_DOCKER_BIN": str(docker),
+        "KH_CURL_BIN": "/bin/true",
+        "KH_CONDA_BIN": "/bin/true",
+    }
+
+    completed = subprocess.run(
+        ["bash", str(ROOT / "deploy/systemd/knowledgehub-rag-incremental-run")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "starting missing embedding services: embedding-gpu1" in completed.stdout
+    assert "stopping scheduler-owned embedding services: embedding-gpu1" in completed.stdout
+    docker_calls = docker_log.read_text(encoding="utf-8")
+    up_call = next(line for line in docker_calls.splitlines() if " up " in line)
+    stop_call = next(line for line in docker_calls.splitlines() if " stop " in line)
+    assert up_call.endswith("up -d --wait embedding-gpu1")
+    assert stop_call.endswith("stop --timeout 120 embedding-gpu1")
+    assert "embedding-gpu0" not in up_call
+    assert "embedding-gpu0" not in stop_call

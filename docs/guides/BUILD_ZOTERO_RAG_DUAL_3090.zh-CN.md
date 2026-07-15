@@ -549,9 +549,11 @@ KH_RAG_RETRY_DELAY_SECONDS=14400
 
 调度器会先检查当前 Compose 服务。如果目标 GPU 对应的 `embedding-gpu0` 或
 `embedding-gpu1` 已在运行，则直接复用，不会把 embedding 自身的显存占用误判为
-外部 workload。如果目标 embedding 尚未运行，则该卡现有的其他容器、debug 或训练
-进程都按外部占用处理，必须通过显存阈值。任务完成或失败后，仅停止本轮由调度器启动
-的 embedding 容器，不停止复用的已有容器。手工立即验收：
+外部 workload。复用前必须通过对应 `/health`；健康的已有容器不会再执行
+`docker compose up`，因而不会被 Compose 配置协调意外重建。如果目标 embedding
+尚未运行，则该卡现有的其他容器、debug 或训练进程都按外部占用处理，必须通过显存
+阈值。任务完成或失败后，仅停止本轮由调度器启动的 embedding 容器，不停止复用的
+已有容器。手工立即验收：
 
 ```bash
 sudo systemctl start knowledgehub-zotero-rag-incremental.service

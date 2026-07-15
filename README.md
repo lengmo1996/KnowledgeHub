@@ -273,7 +273,9 @@ incremental RAG service independently inspects `nvidia-smi`, chooses dual,
 single GPU 0, or single GPU 1 from the available VRAM, starts temporary
 embedding containers, and releases only those containers afterward. A matching
 embedding container that is already running is reused and left running, so its
-own allocation is not mistaken for an unrelated busy GPU. A failed
+own allocation is not mistaken for an unrelated busy GPU. Reuse requires a
+successful health check and completely skips `docker compose up`, preventing
+configuration reconciliation from recreating a healthy container. A failed
 attempt is retried after four hours, at most twice (three total attempts).
 
 The refresh service combines `ProtectSystem=strict` with the cache as its only

@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly NVIDIA_SMI_BIN="${KH_NVIDIA_SMI_BIN:-/usr/bin/nvidia-smi}"
 readonly DOCKER_BIN="${KH_DOCKER_BIN:-/usr/bin/docker}"
+readonly CURL_BIN="${KH_CURL_BIN:-/usr/bin/curl}"
 readonly CONDA_BIN="${KH_CONDA_BIN:-/home/lengmo/anaconda3/bin/conda}"
 readonly MIN_FREE_MB="${KH_RAG_SCHEDULER_MIN_FREE_MB:-20000}"
 readonly MAX_USED_MB="${KH_RAG_SCHEDULER_MAX_USED_MB:-1024}"
@@ -85,6 +86,19 @@ embedding_service_for_gpu() {
   esac
 }
 
+embedding_health_url_for_gpu() {
+  case "$1" in
+    0) printf 'http://127.0.0.1:8080/health' ;;
+    1) printf 'http://127.0.0.1:8082/health' ;;
+    *) fail "no embedding health endpoint is configured for GPU $1" ;;
+  esac
+}
+
+embedding_is_healthy() {
+  "$CURL_BIN" --fail --silent --show-error --max-time 5 \
+    "$(embedding_health_url_for_gpu "$1")" >/dev/null 2>&1
+}
+
 select_gpus() {
   local candidate used free service
   local -a candidates=()
@@ -97,8 +111,12 @@ select_gpus() {
     free="${gpu_free[$candidate]}"
     service="$(embedding_service_for_gpu "$candidate")"
     if [[ -n "${running_services[$service]+present}" ]]; then
-      log "reusing $service on gpu=$candidate; no additional model allocation is needed"
-      selected_ids+=("$candidate")
+      if embedding_is_healthy "$candidate"; then
+        log "reusing healthy $service on gpu=$candidate; compose up will be skipped"
+        selected_ids+=("$candidate")
+      else
+        log "rejecting gpu=$candidate: $service is running but its health check failed"
+      fi
     elif ((used <= MAX_USED_MB && free >= MIN_FREE_MB)); then
       selected_ids+=("$candidate")
     else
@@ -180,8 +198,13 @@ for service in "${selected_services[@]}"; do
 done
 trap cleanup EXIT
 
-"${COMPOSE[@]}" --profile embed-single --profile embed-dual \
-  up -d --wait "${selected_services[@]}"
+if ((${#managed_services[@]} > 0)); then
+  log "starting missing embedding services: ${managed_services[*]}"
+  "${COMPOSE[@]}" --profile embed-single --profile embed-dual \
+    up -d --wait "${managed_services[@]}"
+else
+  log "all selected embedding services are already healthy; skipping compose up"
+fi
 
 export KH_GPU_MODE="$MODE"
 export KH_GPU_IDS="$GPU_IDS"
