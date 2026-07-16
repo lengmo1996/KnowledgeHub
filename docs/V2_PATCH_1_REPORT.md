@@ -55,3 +55,7 @@ The unified `TaskStore` exists and has idempotency, terminal states and expiring
 locks, but it is not yet wrapped around every Code sync/build and Writing derive
 execution path. That integration remains the next bounded hardening round; it
 is not hidden by this index-validation patch.
+
+The implementation commit is `bbde5e0eda88b67b37ff5438aa04b9b88838c08a`.
+The separate release commit contains `state/releases/v2_0_1_manifest.json`, so
+the manifest can pin implementation without a self-referential Git hash.

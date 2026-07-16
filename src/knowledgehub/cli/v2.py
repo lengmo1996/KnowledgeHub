@@ -41,7 +41,10 @@ def add_v2_parsers(subparsers: Any) -> None:
         "validate", help="Validate a release manifest and its repository config hashes"
     )
     release_validate.add_argument(
-        "manifest", type=Path, nargs="?", default=Path("state/releases/v2_manifest.json")
+        "manifest",
+        type=Path,
+        nargs="?",
+        default=Path("state/releases/v2_0_1_manifest.json"),
     )
     release_validate.add_argument("--repository-root", type=Path, default=Path("."))
 
