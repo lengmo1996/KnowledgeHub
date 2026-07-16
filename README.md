@@ -129,6 +129,7 @@ included instead of silently analyzing only embedded English examples. Legacy
 `rules-v1` Writing query responses also expose `payload.writing_id` as a
 response-only alias of `document_id`, making feedback commands uniform without
 rewriting the frozen Writing collection.
+See the [V2.0.4 completion report](docs/V2_PATCH_4_REPORT.md).
 
 ## V2 governance and code intelligence
 

@@ -1,0 +1,125 @@
+{
+  "schema_name": "knowledgehub_release_manifest",
+  "schema_version": "2.0",
+  "release": "v2.0.4",
+  "package_version": "0.2.4",
+  "base_release": "v2.0.3",
+  "base_release_commit": "31334f80078d459cf29d32f51bab59c7ee9af170",
+  "frozen_at": "2026-07-17T00:31:24+08:00",
+  "implementation_commit": "1d6c6fe6253f7b70ce03bce530dde9e4718705f6",
+  "release_commit_policy": "The release commit is the Git commit containing this manifest; implementation_commit identifies the completed patch implementation without creating a self-referential hash.",
+  "changes": [
+    "Added deterministic multilingual lexical, sentence and style analysis for Personal Profiles.",
+    "Rebuilt the explicitly supplied Personal Profile with 24 selected paragraphs under writing-profile-v2.5.",
+    "Normalized frozen rules-v1 document_id to writing_id in query responses without rewriting Qdrant.",
+    "Ignored root-level Personal Profile drafts to keep private source text outside Git."
+  ],
+  "config_hashes": {
+    "configs/knowledgehub.yaml": "31c3a7e1adb8d7f3b236f8d742b1838e1a9dbe76b4310a95dc71b8334e30c09c",
+    "configs/sources/code.yaml": "b963e1e1fa6ed5142bb5b2df7600f4d03752887cc20d4eaae770db7488cf4446",
+    "configs/rag/default.yaml": "6a57d115b1f5a7f1be6c924b733ef2cb562a4b46d0e78bc0614c244d804f9dba",
+    "configs/evaluation/offline.yaml": "e3b1a683d07176dde0e78d2f5df1abab8c61b39d036772011c5ddd139de88a05",
+    "configs/evaluation/v2.yaml": "a8949833e25a996717bd274bb24f92282e34485e152470ec4200b7fa112083b9"
+  },
+  "embedding": {
+    "model": "Qwen/Qwen3-Embedding-4B",
+    "revision": "5cf2132abc99cad020ac570b19d031efec650f2b",
+    "dimension": 1024,
+    "changed_from_v2_0_3": false
+  },
+  "indexes": {
+    "literature": {
+      "collection": "zotero_papers_qwen3_4b_1024_v2",
+      "points": 190131,
+      "evidence": "Read-only count remained green; V2.0.4 performed no Literature write."
+    },
+    "code": {
+      "collection": "knowledgehub_code_qwen3_4b_1024_v1",
+      "stable_alias": "knowledgehub_code_current",
+      "points": 1118,
+      "documents": 124,
+      "evidence": "Read-only state, artifact and Qdrant membership validation passed unchanged."
+    },
+    "writing": {
+      "collection": "knowledgehub_writing_qwen3_4b_1024_v1",
+      "points": 134,
+      "documents": 134,
+      "processor_version": "rules-v1",
+      "evidence": "Response normalization did not rewrite the frozen collection; all 134 points remained green."
+    }
+  },
+  "runtime_integrity": {
+    "valid": true,
+    "checked_at": "2026-07-17T00:30:00+08:00",
+    "checks": {
+      "sources": 7,
+      "normalized": 124,
+      "dependencies": 5,
+      "writing": 134
+    },
+    "index_checks": {
+      "code_chunks": 1118,
+      "code_qdrant_points": 1118,
+      "writing_chunks": 134,
+      "writing_qdrant_points": 134,
+      "literature_qdrant_points": 190131
+    },
+    "errors": 0
+  },
+  "personal_profile": {
+    "available": true,
+    "schema_version": "2.4",
+    "processor_version": "writing-profile-v2.5",
+    "evidence_source": "user_supplied_drafts",
+    "source_count": 1,
+    "sample_count": 24,
+    "raw_source_committed": false,
+    "source_hash_committed": false,
+    "is_normative_rule": false
+  },
+  "writing_identity_compatibility": {
+    "rules_v1_index_rewritten": false,
+    "response_field": "payload.writing_id",
+    "fallback_source": "payload.document_id",
+    "feedback_accepts_normalized_identity": true
+  },
+  "evaluation": {
+    "live_groups": 11,
+    "samples": 24,
+    "failed_groups": 0,
+    "live_report_sha256": "b5fb4c995edf600b874acea2ce4ad217b88eb0a72ad6275bf026e79df4e66942",
+    "comparison_report_sha256": "f1b582cc54a3d8acb49389e9f53ef47570a2adab22a398548d9d465103b30954",
+    "regression_gates_passed": true,
+    "human_feedback_labels": 0
+  },
+  "source_pins": [
+    {"library": "accelerate", "version": "1.14.0", "commit": "beb0672aa8444ea7647aee056f624effe5996346"},
+    {"library": "diffusers", "version": "0.39.0", "commit": "a3608b512ed7248499a44c61d954965ed9bdae4d"},
+    {"library": "lightning", "version": "2.6.5", "commit": "be98784a1a03581b7051a355ae1084fd352d7cea"},
+    {"library": "pytorch", "version": "2.11.0", "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45"},
+    {"library": "transformers", "version": "5.13.0", "commit": "6af945f436d85f2b0c5dff9b14feccd27b1d470b"},
+    {"library": "transformers", "version": "5.13.1", "commit": "4626421dc6b741a329300682a6408246ee465490"},
+    {"library": "transformers", "version": "5.14.0", "commit": "2fa8c195a03938aa148febcc5a696435b4327a47"}
+  ],
+  "interfaces": {
+    "cli_groups": 19,
+    "mcp_tools": 15,
+    "evidence_schema": "query_result@2.0",
+    "legacy_defaults_preserved": true
+  },
+  "tests": {
+    "passed": 342,
+    "failed": 0,
+    "ruff": "passed",
+    "mypy": "passed",
+    "diff_check": "passed"
+  },
+  "knowledge_bases": ["literature", "code", "writing"],
+  "known_limits": [
+    "Personal Profile statistics are descriptive and is_normative_rule remains false even when the source file contains explicit preferences.",
+    "CJK terminology uses deterministic character bigrams rather than model-based word segmentation.",
+    "No subjective feedback label was inferred or submitted for the user.",
+    "The active Writing index remains the frozen 134-entry rules-v1 collection.",
+    "KnowledgeHub does not start a background scheduler or automatically process all libraries or papers."
+  ]
+}
