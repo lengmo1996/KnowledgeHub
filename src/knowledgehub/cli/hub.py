@@ -13,7 +13,11 @@ from knowledgehub.code_rag.environment import EnvironmentCapture
 from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.hub.config import HubConfig
-from knowledgehub.hub.query import HubQueryRequest, HubQueryService
+from knowledgehub.hub.query import (
+    HubQueryRequest,
+    HubQueryService,
+    build_code_query_plan,
+)
 from knowledgehub.writing_rag.derive import WritingDerivationService
 
 
@@ -76,6 +80,10 @@ def add_hub_parsers(subparsers: Any) -> None:
     query.add_argument("--mode", choices=("dense", "sparse", "hybrid"), default="hybrid")
     query.add_argument("--reranker", choices=("off", "light", "quality"), default="off")
     query.add_argument("--top-k", type=int, default=10)
+    query.add_argument("--environment", default="current")
+    query.add_argument("--explain-plan", action="store_true")
+    query.add_argument("--allow-auto-import", action="store_true")
+    query.add_argument("--allow-issues", action="store_true")
 
 
 def run_hub_command(args: argparse.Namespace) -> int:
@@ -180,6 +188,21 @@ def run_hub_command(args: argparse.Namespace) -> int:
                 }.items()
                 if value not in (None, (), "")
             }
+            plan = (
+                build_code_query_plan(
+                    args.query,
+                    environment=args.environment,
+                    library=args.library,
+                    symbol=args.symbol,
+                    allow_auto_import=args.allow_auto_import,
+                    allow_issues=args.allow_issues,
+                )
+                if args.knowledge_base == "code"
+                else None
+            )
+            if args.explain_plan:
+                _emit({"plan": plan})
+                return 0
             search_result = HubQueryService(config).search(
                 HubQueryRequest(
                     knowledge_base=args.knowledge_base,
@@ -192,7 +215,10 @@ def run_hub_command(args: argparse.Namespace) -> int:
                     reranker=args.reranker,
                 )
             )
-            _emit(dataclasses.asdict(search_result))
+            payload = dataclasses.asdict(search_result)
+            if plan is not None:
+                payload["query_plan"] = plan
+            _emit(payload)
             return 0
         raise ValueError(f"unsupported KnowledgeHub command: {args.source}")
     except (ValueError, RuntimeError, OSError) as exc:

@@ -51,6 +51,28 @@ protocol without changing stored entries.
 See [Code RAG](docs/code_rag.md), [Writing RAG](docs/writing_rag.md),
 [data sources](docs/data_sources.md), and [Skill integration](docs/skill_integration.md).
 
+## V2 governance and code intelligence
+
+V2 keeps V1 collections and embedding settings while adding explicit schema
+migrations, durable task/lock state, Qdrant snapshots, integrity validation,
+five library-layout adapters, exact symbol relations, signature diffs,
+repository intake, Writing feedback/similarity controls and grouped evaluation
+fixtures.
+
+```bash
+knowledgehub validate all
+knowledgehub index snapshot code
+knowledgehub symbol build transformers 5.13.1
+knowledgehub symbol compare transformers 5.13.0 5.13.1 PreTrainedModel.from_pretrained
+knowledgehub query code "why did this API fail?" --symbol SomeClass.method --explain-plan
+knowledgehub repository analyze /path/to/repo --environment workstation-3090
+knowledgehub writing-v2 similarity "candidate paragraph"
+```
+
+Snapshot rollback is never implicit and requires `--yes`. Repository analysis
+does not execute code or install dependencies. See [V2 architecture](docs/v2_architecture.md)
+and [V2 migration](docs/v2_migration.md).
+
 The source consumes two independent inputs:
 
 - Zotero Web API v3 supplies metadata, relationships, collections, versions,

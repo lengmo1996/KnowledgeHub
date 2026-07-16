@@ -39,6 +39,33 @@ def classify_code_intent(query: str, explicit: str | None = None) -> str:
     return "source_understanding"
 
 
+def build_code_query_plan(
+    query: str,
+    *,
+    environment: str = "current",
+    library: str | None = None,
+    symbol: str | None = None,
+    allow_auto_import: bool = False,
+    allow_issues: bool = False,
+) -> dict[str, Any]:
+    intent = classify_code_intent(query)
+    steps = ["find_symbol_current"] if symbol else ["search_current_documentation"]
+    if intent in {"compatibility", "migration"}:
+        steps.extend(["find_symbol_target", "find_release_changes", "find_related_source_diff"])
+    if intent == "debug":
+        steps.extend(["find_current_source", "find_release_bugfixes"])
+    if allow_issues:
+        steps.append("find_known_issues")
+    return {
+        "intent": intent,
+        "entities": {"library": library, "symbol": symbol},
+        "environment": environment,
+        "retrieval_steps": steps,
+        "allow_auto_import": allow_auto_import,
+        "allow_issues": allow_issues,
+    }
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HubQueryRequest:
     knowledge_base: str
