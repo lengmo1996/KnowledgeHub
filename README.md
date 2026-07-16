@@ -135,6 +135,7 @@ V2.0.5 closes the explicit-feedback loop. New feedback accepts only canonical
 `writing:` identities and, when the derived manifest is present, rejects
 unknown entries. `knowledgehub writing-v2 feedback-status` audits malformed and
 orphan historical events without deleting or rewriting them.
+See the [V2.0.5 completion report](docs/V2_PATCH_5_REPORT.md).
 
 ## V2 governance and code intelligence
 

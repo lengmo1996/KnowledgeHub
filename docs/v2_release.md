@@ -1,10 +1,11 @@
 # KnowledgeHub V2 release freeze
 
-KnowledgeHub V2.0.4 is the current frozen patch. The machine-readable source of
-truth is `state/releases/v2_0_4_manifest.json`; it records the pre-freeze
+KnowledgeHub V2.0.5 is the current frozen patch. The machine-readable source of
+truth is `state/releases/v2_0_5_manifest.json`; it records the pre-freeze
 implementation commit, configuration hashes, pinned upstream commits, index
 evidence, interface counts, evaluation gates, dependency/source-diff evidence,
-adaptation audits, multilingual Personal Profile validation and known limits.
+adaptation audits, multilingual Personal Profile validation, feedback-integrity
+evidence and known limits.
 The Git commit containing the manifest is the release commit, avoiding a
 self-referential commit hash inside the same file.
 
@@ -17,6 +18,8 @@ V2.0.1 also remains immutable in `state/releases/v2_0_1_manifest.json`.
 V2.0.2 also remains immutable in `state/releases/v2_0_2_manifest.json`.
 
 V2.0.3 also remains immutable in `state/releases/v2_0_3_manifest.json`.
+
+V2.0.4 also remains immutable in `state/releases/v2_0_4_manifest.json`.
 
 ## Deterministic validation
 
