@@ -1,1 +1,2 @@
 {"text":"Although prior work has progressed, an important limitation remains.","section":"Introduction","expected_function":"research_gap","notes":"Synthetic."}
+{"text":"The results indicate a consistent gain, suggesting that the proposed normalization improves robustness.","section":"Experiment","expected_function":"result_interpretation","expected_section":"Experiment","difficulty":"easy","notes":"Synthetic; verify both section and function."}

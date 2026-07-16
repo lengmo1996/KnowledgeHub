@@ -1,1 +1,2 @@
 {"profile_type":"venue","source":"user_selected_literature","expected_normative":false}
+{"profile_type":"personal","source":"user_supplied_drafts","expected_normative":false,"must_not_fallback_to":"literature"}

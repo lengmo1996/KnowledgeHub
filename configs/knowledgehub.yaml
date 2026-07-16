@@ -23,6 +23,6 @@ writing:
   data_root: /data/KnowledgeHub/writing
   literature_data_dir: /data/KnowledgeHub/rag/zotero
   analyzer: rules
-  processor_version: rules-v1
+  processor_version: rules-v2
   default_limit: 5
   minimum_quality: 0.45

@@ -18,6 +18,7 @@ from knowledgehub.indexing.incremental import IncrementalChunkIndexer, IndexInpu
 from knowledgehub.pipeline.artifacts import safe_document_name
 from knowledgehub.pipeline.models import ChunkRecord
 from knowledgehub.writing_rag.analyzer import RuleWritingAnalyzer, WritingAnalyzer
+from knowledgehub.writing_rag.v2 import paragraph_features, paragraph_structure
 
 _NAMESPACE = uuid.UUID("d04ea279-19a5-5e05-afab-cc25f389369f")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -32,12 +33,23 @@ class WritingEntry:
     source_title: str
     source_section: str
     source_location: Mapping[str, int | None]
+    source_collections: tuple[str, ...]
+    venue: str | None
     research_domain: tuple[str, ...]
     writing_function: str
     original_text: str
     normalized_text: str
     abstract_pattern: str
     rhetorical_structure: tuple[str, ...]
+    paragraph_pattern: str
+    moves: tuple[str, ...]
+    transition_relations: tuple[str, ...]
+    sentence_roles: tuple[Mapping[str, int | str], ...]
+    usage_context: str
+    expression_strength: str
+    tone: str
+    paragraph_word_count: int
+    contains_math: bool
     usage_notes: str
     quality_score: float
     confidence: float
@@ -51,6 +63,10 @@ class WritingEntry:
         value = asdict(self)
         value["research_domain"] = list(self.research_domain)
         value["rhetorical_structure"] = list(self.rhetorical_structure)
+        value["source_collections"] = list(self.source_collections)
+        value["moves"] = list(self.moves)
+        value["transition_relations"] = list(self.transition_relations)
+        value["sentence_roles"] = list(self.sentence_roles)
         return value
 
 
@@ -95,18 +111,34 @@ class WritingDerivationService:
             metadata = json.loads(str(row.get("metadata_json") or "{}"))
             if paper_id and document_id != paper_id:
                 continue
-            if collection and collection not in set(metadata.get("collection_keys") or []) and collection not in set(metadata.get("collection_paths") or []):
+            if collection and collection not in self._collection_values(metadata):
                 continue
-            parsed = self.literature_data_dir / "parsed" / "markdown" / f"{safe_document_name(document_id)}.md"
+            parsed = (
+                self.literature_data_dir
+                / "parsed"
+                / "markdown"
+                / f"{safe_document_name(document_id)}.md"
+            )
             if parsed.is_file():
                 selected.append((document_id, metadata))
             if limit is not None and len(selected) >= limit:
                 break
         entries: list[WritingEntry] = []
         for document_id, metadata in selected:
-            path = self.literature_data_dir / "parsed" / "markdown" / f"{safe_document_name(document_id)}.md"
-            entries.extend(self._paper_entries(document_id, metadata, path.read_text(encoding="utf-8")))
-        unique = {entry.writing_id: entry for entry in entries if entry.quality_score >= self.minimum_quality}
+            path = (
+                self.literature_data_dir
+                / "parsed"
+                / "markdown"
+                / f"{safe_document_name(document_id)}.md"
+            )
+            entries.extend(
+                self._paper_entries(document_id, metadata, path.read_text(encoding="utf-8"))
+            )
+        unique = {
+            entry.writing_id: entry
+            for entry in entries
+            if entry.quality_score >= self.minimum_quality
+        }
         ordered = [unique[key] for key in sorted(unique)]
         derived_path = self.data_root / "derived" / "writing_entries.jsonl"
         if not dry_run:
@@ -118,6 +150,7 @@ class WritingDerivationService:
         result.update(
             {
                 "papers_selected": len(selected),
+                "selected_paper_ids": [document_id for document_id, _metadata in selected],
                 "entries_derived": len(ordered),
                 "derived_manifest": str(derived_path),
                 "analyzer": self.analyzer.name,
@@ -144,11 +177,16 @@ class WritingDerivationService:
         self, document_id: str, metadata: Mapping[str, Any], markdown: str
     ) -> Iterable[WritingEntry]:
         title = str(metadata.get("title") or document_id)
+        collections = tuple(sorted(self._collection_values(metadata)))
+        venue = self._venue(metadata)
         domains = tuple(
             sorted(
                 {
                     str(value).lower().replace(" ", "_")
-                    for value in [*(metadata.get("tags") or []), *(metadata.get("collection_paths") or [])]
+                    for value in [
+                        *(metadata.get("tags") or []),
+                        *self._collection_domains(metadata),
+                    ]
                     if value
                 }
             )
@@ -157,6 +195,8 @@ class WritingDerivationService:
             analysis = self.analyzer.analyze(text, section=section, domains=domains)
             if analysis is None:
                 continue
+            structure = paragraph_structure(text, section)
+            features = paragraph_features(text)
             content_hash = sha256_text(text)
             identity = sha256_json(
                 {
@@ -174,12 +214,25 @@ class WritingDerivationService:
                 source_title=title,
                 source_section=section,
                 source_location={"page": None, "paragraph": paragraph_index},
+                source_collections=collections,
+                venue=venue,
                 research_domain=domains,
                 writing_function=analysis.writing_function,
                 original_text=text,
                 normalized_text=analysis.normalized_text,
                 abstract_pattern=analysis.abstract_pattern,
                 rhetorical_structure=analysis.rhetorical_structure,
+                paragraph_pattern=str(structure["paragraph_pattern"]),
+                moves=tuple(str(value) for value in structure["moves"]),
+                transition_relations=tuple(
+                    str(value) for value in structure["transition_relations"]
+                ),
+                sentence_roles=tuple(structure["sentence_roles"]),
+                usage_context=str(structure["usage_context"]),
+                expression_strength=str(features["expression_strength"]),
+                tone=str(features["tone"]),
+                paragraph_word_count=int(features["paragraph_word_count"]),
+                contains_math=bool(features["contains_math"]),
                 usage_notes=analysis.usage_notes,
                 quality_score=analysis.quality_score,
                 confidence=analysis.confidence,
@@ -189,6 +242,61 @@ class WritingDerivationService:
                 prompt_version=None,
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
+
+    @staticmethod
+    def _collection_values(metadata: Mapping[str, Any]) -> set[str]:
+        values = {
+            str(value)
+            for value in [
+                *(metadata.get("collection_keys") or []),
+                *(metadata.get("collection_paths") or []),
+            ]
+            if value
+        }
+        for collection in metadata.get("collections") or []:
+            if not isinstance(collection, Mapping):
+                continue
+            values.update(
+                str(collection[key]) for key in ("key", "name", "path") if collection.get(key)
+            )
+        return values
+
+    @staticmethod
+    def _collection_domains(metadata: Mapping[str, Any]) -> set[str]:
+        values = {str(value) for value in metadata.get("collection_paths") or [] if value}
+        for collection in metadata.get("collections") or []:
+            if isinstance(collection, Mapping):
+                values.update(
+                    str(collection[key]) for key in ("name", "path") if collection.get(key)
+                )
+        return values
+
+    @staticmethod
+    def _venue(metadata: Mapping[str, Any]) -> str | None:
+        publication = str(metadata.get("publication_title") or "").strip()
+        if publication:
+            return publication
+        candidates = [
+            *(metadata.get("tags") or []),
+            *(metadata.get("collection_paths") or []),
+            *(
+                value
+                for collection in metadata.get("collections") or []
+                if isinstance(collection, Mapping)
+                for value in (collection.get("name"), collection.get("path"))
+                if value
+            ),
+        ]
+        known = re.compile(
+            r"\b(?:NeurIPS|NIPS|ICLR|ICML|CVPR|ECCV|ICCV|AAAI|ACL|EMNLP|IEEE\s+TIP)\b",
+            re.I,
+        )
+        for candidate in candidates:
+            match = known.search(str(candidate))
+            if match:
+                value = match.group(0)
+                return "NeurIPS" if value.upper() == "NIPS" else value
+        return None
 
     @staticmethod
     def _paragraphs(markdown: str) -> Iterable[tuple[str, int, str]]:
@@ -233,16 +341,30 @@ class WritingDerivationService:
         )
         metadata = {
             "knowledge_base": "writing",
+            "writing_id": entry.writing_id,
             "source": "literature_derived",
             "source_type": "writing_pattern",
             "source_paper_id": entry.source_paper_id,
             "source_title": entry.source_title,
+            "source_location": dict(entry.source_location),
+            "source_collections": list(entry.source_collections),
             "section": entry.source_section,
+            "venue": entry.venue,
             "writing_function": entry.writing_function,
             "research_domain": list(entry.research_domain),
             "abstract_pattern": entry.abstract_pattern,
             "rhetorical_structure": list(entry.rhetorical_structure),
+            "paragraph_pattern": entry.paragraph_pattern,
+            "moves": list(entry.moves),
+            "transition_relations": list(entry.transition_relations),
+            "sentence_roles": list(entry.sentence_roles),
+            "usage_context": entry.usage_context,
+            "expression_strength": entry.expression_strength,
+            "tone": entry.tone,
+            "paragraph_word_count": entry.paragraph_word_count,
+            "contains_math": entry.contains_math,
             "usage_notes": entry.usage_notes,
+            "original_text": entry.original_text,
             "source_excerpt": entry.original_text[:320],
             "quality_score": entry.quality_score,
             "confidence": entry.confidence,
@@ -259,7 +381,9 @@ class WritingDerivationService:
             content=text,
             metadata=metadata,
         ).validate()
-        fingerprint = sha256_json({"document": document.document_id, "text": text, "processor": self.processor_version})
+        fingerprint = sha256_json(
+            {"document": document.document_id, "text": text, "processor": self.processor_version}
+        )
         chunk = ChunkRecord(
             chunk_id=str(uuid.uuid5(_NAMESPACE, fingerprint)),
             document_id=document.document_id,

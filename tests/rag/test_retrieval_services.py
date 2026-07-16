@@ -10,7 +10,7 @@ from knowledgehub.indexing.qdrant import SearchPoint
 from knowledgehub.pipeline.config import RagConfig, SecretValue
 from knowledgehub.retrieval.fusion import reciprocal_rank_fusion
 from knowledgehub.retrieval.models import SearchRequest, SearchResponse
-from knowledgehub.retrieval.service import RetrievalService
+from knowledgehub.retrieval.service import RetrievalService, _build_filter
 from knowledgehub.services.reranker_api import (
     QwenCausalLMReranker,
 )
@@ -55,6 +55,29 @@ def test_rrf_and_sparse_query_without_reranker(tmp_path) -> None:
     response = service.search(SearchRequest(query="what", mode="sparse"))
     assert response.hits[0].payload["text"] == "answer"
     assert response.embedding_revision == config.embedding_revision
+
+
+def test_writing_filter_combines_style_and_numeric_facets() -> None:
+    value = _build_filter(
+        SearchRequest(
+            query="gap",
+            source=None,
+            section="Introduction",
+            writing_function="research_gap",
+            research_domain="vision",
+            venue="NeurIPS",
+            expression_strength="cautious",
+            tone="cautious",
+            paragraph_words_min=60,
+            paragraph_words_max=180,
+            contains_math=False,
+        )
+    )
+    conditions = {condition.key: condition for condition in value.must}
+    assert conditions["venue"].match.value == "NeurIPS"
+    assert conditions["paragraph_word_count"].range.gte == 60
+    assert conditions["paragraph_word_count"].range.lte == 180
+    assert conditions["contains_math"].match.value is False
 
 
 def test_search_api_requires_bearer_key(tmp_path) -> None:

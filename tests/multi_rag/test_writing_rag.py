@@ -34,6 +34,44 @@ This limitation motivates a robust approach for practical deployment.
 """
     values = list(WritingDerivationService._paragraphs(markdown))
     assert values == [
-        ("Introduction", 1, "Although prior work is effective, it remains limited in difficult settings."),
+        (
+            "Introduction",
+            1,
+            "Although prior work is effective, it remains limited in difficult settings.",
+        ),
         ("Motivation", 1, "This limitation motivates a robust approach for practical deployment."),
     ]
+
+
+def test_derived_entry_contains_v24_paragraph_and_filter_metadata(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service = WritingDerivationService(
+        literature_data_dir=tmp_path,
+        data_root=tmp_path,
+        rag_config=None,
+        processor_version="rules-v2",
+    )
+    markdown = """# Introduction
+
+Prior work performs well in standard settings. However, it remains limited in difficult domains. We propose a robust method to address this gap.
+"""
+    entries = list(
+        service._paper_entries(
+            "paper-1",
+            {
+                "title": "Paper",
+                "tags": ["NeurIPS", "vision"],
+                "collections": [{"key": "C1", "path": "NeurIPS/2025"}],
+            },
+            markdown,
+        )
+    )
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.processor_version == "rules-v2"
+    assert entry.venue == "NeurIPS"
+    assert entry.moves == ("establish_context", "identify_gap", "introduce_solution")
+    assert entry.paragraph_pattern
+    indexed = service._index_input(entry)
+    metadata = indexed.chunks[0].metadata
+    assert metadata["paragraph_word_count"] > 0
+    assert metadata["source_location"] == {"page": None, "paragraph": 1}

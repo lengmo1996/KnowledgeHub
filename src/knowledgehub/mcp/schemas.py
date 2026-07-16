@@ -32,11 +32,23 @@ class SearchFilters(StrictModel):
     section: str | None = Field(default=None, max_length=256)
     writing_function: str | None = Field(default=None, max_length=128)
     research_domain: str | None = Field(default=None, max_length=128)
+    venue: str | None = Field(default=None, max_length=256)
+    expression_strength: Literal["cautious", "moderate", "strong"] | None = None
+    tone: Literal["neutral", "cautious", "assertive", "critical"] | None = None
+    paragraph_words_min: int | None = Field(default=None, ge=1, le=2000)
+    paragraph_words_max: int | None = Field(default=None, ge=1, le=2000)
+    contains_math: bool | None = None
 
     @model_validator(mode="after")
     def valid_years(self) -> "SearchFilters":
         if self.year_from and self.year_to and self.year_from > self.year_to:
             raise ValueError("year_from cannot exceed year_to")
+        if (
+            self.paragraph_words_min is not None
+            and self.paragraph_words_max is not None
+            and self.paragraph_words_min > self.paragraph_words_max
+        ):
+            raise ValueError("paragraph_words_min cannot exceed paragraph_words_max")
         return self
 
 
@@ -49,7 +61,9 @@ class SearchInput(StrictModel):
     knowledge_base: Literal["literature", "code", "writing"] = "literature"
     query: str = Field(min_length=1, max_length=4000)
     intent: str | None = Field(default=None, max_length=64)
-    return_mode: Literal["pattern_first", "include_original"] = "pattern_first"
+    return_mode: Literal["pattern_first", "paragraph_structure", "include_original"] = (
+        "pattern_first"
+    )
     mode: Literal["dense", "sparse", "hybrid"] = "hybrid"
     limit: int = Field(default=10, ge=1, le=50)
     prefetch_limit: int = Field(default=50, ge=1, le=200)
@@ -122,8 +136,42 @@ class WritingPatternsInput(StrictModel):
     section: str | None = Field(default=None, max_length=256)
     writing_function: str | None = Field(default=None, max_length=128)
     research_domain: str | None = Field(default=None, max_length=128)
-    return_mode: Literal["pattern_first", "include_original"] = "pattern_first"
+    venue: str | None = Field(default=None, max_length=256)
+    expression_strength: Literal["cautious", "moderate", "strong"] | None = None
+    tone: Literal["neutral", "cautious", "assertive", "critical"] | None = None
+    paragraph_words_min: int | None = Field(default=None, ge=1, le=2000)
+    paragraph_words_max: int | None = Field(default=None, ge=1, le=2000)
+    contains_math: bool | None = None
+    return_mode: Literal["pattern_first", "paragraph_structure", "include_original"] = (
+        "pattern_first"
+    )
     limit: int = Field(default=8, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def valid_paragraph_range(self) -> "WritingPatternsInput":
+        if (
+            self.paragraph_words_min is not None
+            and self.paragraph_words_max is not None
+            and self.paragraph_words_min > self.paragraph_words_max
+        ):
+            raise ValueError("paragraph_words_min cannot exceed paragraph_words_max")
+        return self
+
+
+class WritingTaskInput(WritingPatternsInput):
+    task: Literal[
+        "retrieve_patterns",
+        "generate_outline",
+        "draft_paragraph",
+        "rewrite_paragraph",
+        "strengthen_argument",
+        "improve_transition",
+        "compare_expressions",
+        "audit_repetition",
+        "audit_source_similarity",
+        "respond_to_reviewer",
+    ]
+    text: str | None = Field(default=None, max_length=20000)
 
 
 class InspectSymbolInput(StrictModel):
@@ -174,6 +222,7 @@ INPUT_MODELS: dict[str, type[StrictModel]] = {
     "rag_status": StatusInput,
     "rag_compare_versions": CompareVersionsInput,
     "writing_patterns": WritingPatternsInput,
+    "writing_task": WritingTaskInput,
     "knowledge_inspect_symbol": InspectSymbolInput,
     "knowledge_compare_symbols": CompareSymbolsInput,
     "knowledge_analyze_repository": AnalyzeRepositoryInput,

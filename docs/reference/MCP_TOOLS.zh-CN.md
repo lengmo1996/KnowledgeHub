@@ -1,6 +1,6 @@
 # KnowledgeHub MCP 工具参考
 
-MCP 共提供 13 个 closed-world 工具，并返回 `structuredContent` 与紧凑 text fallback。除
+MCP 共提供 14 个 closed-world 工具，并返回 `structuredContent` 与紧凑 text fallback。除
 `knowledge_submit_feedback` 外均为只读、幂等；所有对象 schema 都拒绝未知字段。响应中的文档文本带有：
 
 ```json
@@ -63,10 +63,11 @@ HMAC key、上游 API key 或原始异常内容。
 
 `rag_search` 新增可选 `knowledge_base`（`literature`、`code`、`writing`），
 省略时仍查询 Literature。Code/Writing 可使用版本、来源类型、符号、章节、
-写作功能和研究领域过滤器。另提供只读工具：
+写作功能、研究领域、Venue、表达强度、语气、段落长度和数学描述过滤器。另提供只读工具：
 
 - `rag_compare_versions`：返回带版本与证据角色的兼容性资料；
 - `writing_patterns`：默认返回抽象模板、修辞结构、来源短片段和使用提示。
+- `writing_task`：支持十种稳定写作任务，返回段落结构检索结果和证据计划，不直接生成最终文本。
 
 ## V2 精确知识工具
 

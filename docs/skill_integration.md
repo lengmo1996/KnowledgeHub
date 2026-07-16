@@ -40,7 +40,8 @@ is static and read-only; it returns declaration-based compatibility evidence,
 not a runtime guarantee.
 
 For academic-writing, manuscript-audit and reviewer-response Skills use
-`writing_patterns` or `rag_search` with `knowledge_base=writing`:
+`writing_task`, `writing_patterns` or `rag_search` with
+`knowledge_base=writing`:
 
 ```json
 {
@@ -48,10 +49,21 @@ For academic-writing, manuscript-audit and reviewer-response Skills use
   "section": "Introduction",
   "writing_function": "research_gap",
   "research_domain": "diffusion_models",
-  "return_mode": "pattern_first",
+  "venue": "NeurIPS",
+  "expression_strength": "cautious",
+  "paragraph_words_min": 60,
+  "paragraph_words_max": 180,
+  "contains_math": false,
+  "return_mode": "paragraph_structure",
   "limit": 8
 }
 ```
+
+`writing_task` accepts the same filters plus one of the ten stable task names
+and optional input text. It returns a retrieval result and a task plan; it does
+not return caller-ready prose. Skills must keep general academic guidance,
+Venue Profile evidence and Personal Profile evidence as three separately
+labelled style layers.
 
 The preferred response fields are writing function, abstract pattern,
 rhetorical structure, usage notes, short source excerpt and source paper. Skills

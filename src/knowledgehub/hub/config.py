@@ -34,7 +34,7 @@ class WritingHubConfig:
     data_root: Path
     literature_data_dir: Path
     analyzer: str = "rules"
-    processor_version: str = "rules-v1"
+    processor_version: str = "rules-v2"
     default_limit: int = 5
     minimum_quality: float = 0.45
 
@@ -95,7 +95,7 @@ class HubConfig:
                 data_root=resolve(writing_raw.get("data_root")),
                 literature_data_dir=resolve(writing_raw.get("literature_data_dir")),
                 analyzer=str(writing_raw.get("analyzer") or "rules"),
-                processor_version=str(writing_raw.get("processor_version") or "rules-v1"),
+                processor_version=str(writing_raw.get("processor_version") or "rules-v2"),
                 default_limit=int(writing_raw.get("default_limit", 5)),
                 minimum_quality=float(writing_raw.get("minimum_quality", 0.45)),
             ),

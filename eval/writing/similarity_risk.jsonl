@@ -1,1 +1,2 @@
 {"candidate":"this exact phrase appears in the source","source":"this exact phrase appears in the source text","expected_risk":"high","assessment":"internal_source_similarity"}
+{"candidate":"Our evaluation uses a distinct protocol and reports bounded observations.","source":"The source discusses unrelated training details and different measurements.","expected_risk":"low","assessment":"internal_source_similarity","legal_plagiarism_assessment":false}

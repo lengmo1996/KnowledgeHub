@@ -17,7 +17,12 @@ from knowledgehub.hub.config import HubConfig
 from knowledgehub.hub.query import HubQueryRequest, HubQueryService
 from knowledgehub.workflows.adaptation import AdaptationWorkflow, parse_debug_log
 from knowledgehub.workflows.repository import RepositoryIntake
-from knowledgehub.writing_rag.v2 import WritingFeedbackStore, similarity_risk
+from knowledgehub.writing_rag.v2 import (
+    WritingFeedbackStore,
+    WritingProfileStore,
+    WritingTaskPlanner,
+    similarity_risk,
+)
 
 
 def add_v2_parsers(subparsers: Any) -> None:
@@ -51,13 +56,19 @@ def add_v2_parsers(subparsers: Any) -> None:
     unlock.add_argument("lock_key")
     unlock.add_argument("--force", action="store_true", required=True)
 
-    validate = subparsers.add_parser("validate", help="Validate cross-domain source and derived integrity")
+    validate = subparsers.add_parser(
+        "validate", help="Validate cross-domain source and derived integrity"
+    )
     validate.add_argument("target", choices=("sources", "normalized", "writing", "all"))
 
-    symbol = subparsers.add_parser("symbol", help="Build, inspect or compare the Python symbol catalog")
+    symbol = subparsers.add_parser(
+        "symbol", help="Build, inspect or compare the Python symbol catalog"
+    )
     symbol_commands = symbol.add_subparsers(dest="symbol_command", required=True)
     build = symbol_commands.add_parser("build")
-    build.add_argument("library", choices=("pytorch", "transformers", "diffusers", "accelerate", "lightning"))
+    build.add_argument(
+        "library", choices=("pytorch", "transformers", "diffusers", "accelerate", "lightning")
+    )
     build.add_argument("version")
     inspect = symbol_commands.add_parser("inspect")
     inspect.add_argument("library")
@@ -69,7 +80,9 @@ def add_v2_parsers(subparsers: Any) -> None:
     compare.add_argument("to_version")
     compare.add_argument("symbol")
 
-    repository = subparsers.add_parser("repository", help="Analyze a repository without executing it")
+    repository = subparsers.add_parser(
+        "repository", help="Analyze a repository without executing it"
+    )
     repository_commands = repository.add_subparsers(dest="repository_command", required=True)
     analyze = repository_commands.add_parser("analyze")
     analyze.add_argument("path", type=Path)
@@ -103,7 +116,9 @@ def add_v2_parsers(subparsers: Any) -> None:
     verification.add_argument("--output-file", type=Path)
     verification.add_argument("--output", default="")
     verification.add_argument("--scope", default="bounded")
-    verification.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
+    verification.add_argument(
+        "--output-root", type=Path, default=Path("/data/KnowledgeHub/reports")
+    )
     finalize = repository_commands.add_parser("finalize")
     finalize.add_argument("path", type=Path)
     finalize.add_argument("--risk", action="append", dest="risks", default=[])
@@ -119,6 +134,34 @@ def add_v2_parsers(subparsers: Any) -> None:
     feedback = writing_commands.add_parser("feedback")
     feedback.add_argument("writing_id")
     feedback.add_argument("label")
+    profile = writing_commands.add_parser("profile")
+    profile_commands = profile.add_subparsers(dest="profile_command", required=True)
+    venue = profile_commands.add_parser("venue")
+    venue.add_argument("name")
+    venue.add_argument("--paper-id", action="append", dest="paper_ids", required=True)
+    venue.add_argument(
+        "--section",
+        action="append",
+        dest="sections",
+        choices=("Introduction", "Method", "Experiment"),
+        default=[],
+    )
+    personal = profile_commands.add_parser("personal")
+    personal.add_argument("name")
+    personal.add_argument("--draft", action="append", type=Path, dest="drafts", required=True)
+    profiles = writing_commands.add_parser("profiles")
+    profiles.add_argument("--type", choices=("venue", "personal"), dest="profile_type")
+    writing_task = writing_commands.add_parser("task")
+    writing_task.add_argument(
+        "task",
+        choices=tuple(sorted(WritingTaskPlanner.TASKS)),
+    )
+    writing_task.add_argument("objective")
+    writing_task.add_argument("--text")
+    writing_task.add_argument("--section")
+    writing_task.add_argument("--function", dest="writing_function")
+    writing_task.add_argument("--domain")
+    writing_task.add_argument("--venue")
 
 
 def run_v2_command(args: argparse.Namespace) -> int:
@@ -137,7 +180,9 @@ def run_v2_command(args: argparse.Namespace) -> int:
         if args.index_command == "list-snapshots":
             return _emit({"snapshots": manager.list(args.knowledge_base)})
         if args.index_command == "rollback":
-            return _emit(manager.rollback(args.knowledge_base, args.snapshot_id, confirmed=args.yes))
+            return _emit(
+                manager.rollback(args.knowledge_base, args.snapshot_id, confirmed=args.yes)
+            )
         if args.index_command == "stage":
             return _emit(promotion.stage(args.knowledge_base, args.candidate_collection))
         if args.index_command == "promote":
@@ -159,13 +204,24 @@ def run_v2_command(args: argparse.Namespace) -> int:
     if args.source == "symbol":
         catalog = SymbolIndex(config.code.data_root / "state" / "symbols.sqlite3")
         if args.symbol_command == "build":
-            marker = config.code.data_root / "sources" / "repositories" / args.library / args.version / "current.json"
+            marker = (
+                config.code.data_root
+                / "sources"
+                / "repositories"
+                / args.library
+                / args.version
+                / "current.json"
+            )
             value = json.loads(marker.read_text(encoding="utf-8"))
             root = Path(value["source_path"])
-            result = catalog.build(args.library, args.version, root, adapter_for(args.library).discover_source(root))
+            result = catalog.build(
+                args.library, args.version, root, adapter_for(args.library).discover_source(root)
+            )
             return _emit(result)
         if args.symbol_command == "inspect":
-            return _emit(catalog.inspect(args.library, args.version, args.symbol) or {"status": "not_found"})
+            return _emit(
+                catalog.inspect(args.library, args.version, args.symbol) or {"status": "not_found"}
+            )
         old = catalog.inspect(args.library, args.from_version, args.symbol)
         new = catalog.inspect(args.library, args.to_version, args.symbol)
         return _emit(compare_symbols(old, new))
@@ -180,10 +236,7 @@ def run_v2_command(args: argparse.Namespace) -> int:
         workflow = AdaptationWorkflow(args.path, args.output_root)
         if args.repository_command in {"analyze", "evidence"}:
             environment_path = (
-                config.code.data_root
-                / "state"
-                / "environments"
-                / f"{args.environment}.json"
+                config.code.data_root / "state" / "environments" / f"{args.environment}.json"
             )
             environment = json.loads(environment_path.read_text(encoding="utf-8"))
             if args.repository_command == "analyze":
@@ -198,8 +251,7 @@ def run_v2_command(args: argparse.Namespace) -> int:
                         "api_libraries": len(profile["api_usage"]),
                         "compatibility_statuses": {
                             status: sum(
-                                item["status"] == status
-                                for item in result["compatibility_matrix"]
+                                item["status"] == status for item in result["compatibility_matrix"]
                             )
                             for status in ("likely_compatible", "conflict", "unknown")
                         },
@@ -269,18 +321,18 @@ def run_v2_command(args: argparse.Namespace) -> int:
                 warnings.extend(response.warnings)
                 evidence_values.extend(
                     [
-                    {
-                        "source_type": hit.payload.get("source_type"),
-                        "library": hit.payload.get("library"),
-                        "version": hit.payload.get("version"),
-                        "symbol": hit.payload.get("symbol"),
-                        "content": hit.payload.get("text"),
-                        "source_url": hit.payload.get("source_url"),
-                        "commit": hit.payload.get("commit"),
-                        "evidence_role": hit.payload.get("evidence_role"),
-                        "inference": hit.payload.get("inference", False),
-                    }
-                    for hit in response.hits
+                        {
+                            "source_type": hit.payload.get("source_type"),
+                            "library": hit.payload.get("library"),
+                            "version": hit.payload.get("version"),
+                            "symbol": hit.payload.get("symbol"),
+                            "content": hit.payload.get("text"),
+                            "source_url": hit.payload.get("source_url"),
+                            "commit": hit.payload.get("commit"),
+                            "evidence_role": hit.payload.get("evidence_role"),
+                            "inference": hit.payload.get("inference", False),
+                        }
+                        for hit in response.hits
                     ]
                 )
             else:
@@ -325,9 +377,73 @@ def run_v2_command(args: argparse.Namespace) -> int:
         return _emit(workflow.finalize(unresolved_risks=args.risks))
     if args.source == "writing-v2":
         if args.writing_v2_command == "feedback":
-            return _emit(WritingFeedbackStore(config.writing.data_root / "state" / "feedback.sqlite3").submit(args.writing_id, args.label))
-        entries = [json.loads(line) for line in (config.writing.data_root / "derived" / "writing_entries.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-        sources = [{"source_id": item["writing_id"], "text": item["original_text"]} for item in entries]
+            return _emit(
+                WritingFeedbackStore(
+                    config.writing.data_root / "state" / "feedback.sqlite3"
+                ).submit(args.writing_id, args.label)
+            )
+        profile_store = WritingProfileStore(config.writing.data_root / "manifests" / "profiles")
+        if args.writing_v2_command == "profiles":
+            return _emit({"profiles": profile_store.list(args.profile_type)})
+        if args.writing_v2_command == "profile":
+            if args.profile_command == "personal":
+                return _emit(profile_store.build_personal(name=args.name, drafts=args.drafts))
+            entries = [
+                json.loads(line)
+                for line in (config.writing.data_root / "derived" / "writing_entries.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            return _emit(
+                profile_store.build_venue(
+                    entries,
+                    name=args.name,
+                    paper_ids=args.paper_ids,
+                    sections=args.sections,
+                )
+            )
+        if args.writing_v2_command == "task":
+            filters = {
+                key: value
+                for key, value in {
+                    "section": args.section,
+                    "writing_function": args.writing_function,
+                    "research_domain": args.domain,
+                    "venue": args.venue,
+                }.items()
+                if value
+            }
+            plan = WritingTaskPlanner().plan(
+                args.task,
+                objective=args.objective,
+                text=args.text,
+                filters=filters,
+            )
+            if args.task != "audit_source_similarity":
+                return _emit(plan)
+            entries = [
+                json.loads(line)
+                for line in (config.writing.data_root / "derived" / "writing_entries.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            sources = [
+                {"source_id": item["writing_id"], "text": item["original_text"]}
+                for item in entries
+            ]
+            return _emit({"plan": plan, "similarity_audit": similarity_risk(args.text, sources)})
+        entries = [
+            json.loads(line)
+            for line in (config.writing.data_root / "derived" / "writing_entries.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+        sources = [
+            {"source_id": item["writing_id"], "text": item["original_text"]} for item in entries
+        ]
         return _emit(similarity_risk(args.text, sources))
     raise ValueError("unsupported V2 command")
 

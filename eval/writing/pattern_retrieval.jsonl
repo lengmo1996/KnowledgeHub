@@ -1,1 +1,2 @@
 {"query":"transition from progress to limitation","section":"Introduction","expected_function":"research_gap","notes":"Pattern-first result expected."}
+{"query":"interpret a measured improvement without overstating causality","section":"Experiment","expected_function":"result_interpretation","expected_domains":["computer_vision"],"human_labels":{"pattern_transferability_score":null,"accepted":null},"notes":"Human labels are populated only after review."}

@@ -94,6 +94,12 @@ class HubQueryService:
             raise ValueError("knowledge_base must be literature, code, or writing")
         if not value.query.strip():
             raise ValueError("query cannot be empty")
+        if value.knowledge_base == "writing" and value.return_mode not in {
+            "pattern_first",
+            "paragraph_structure",
+            "include_original",
+        }:
+            raise ValueError("unsupported Writing return mode")
         rag_config = self.config.rag_config(value.knowledge_base).with_overrides(
             reranker_profile=value.reranker
         )
@@ -151,14 +157,48 @@ class HubQueryService:
                     -hit.score,
                 )
             )
-        elif value.knowledge_base == "writing" and value.return_mode == "pattern_first":
-            hits = [self._pattern_first(hit) for hit in hits]
+        elif value.knowledge_base == "writing":
+            hits = self._apply_writing_feedback(hits)
+            if value.return_mode == "pattern_first":
+                hits = [self._pattern_first(hit) for hit in hits]
+            elif value.return_mode == "paragraph_structure":
+                hits = [self._paragraph_structure(hit) for hit in hits]
         return dataclasses.replace(response, hits=tuple(hits[: value.top_k]))
 
+    def _apply_writing_feedback(self, hits: list[SearchHit]) -> list[SearchHit]:
+        writing = getattr(self.config, "writing", None)
+        if writing is None:
+            return hits
+        path = writing.data_root / "state" / "feedback.sqlite3"
+        if not path.is_file():
+            return hits
+        from knowledgehub.writing_rag.v2 import WritingFeedbackStore
+
+        identifiers = [
+            str(hit.payload.get("writing_id") or hit.payload.get("document_id") or "")
+            for hit in hits
+        ]
+        adjustments = WritingFeedbackStore(path, read_only=True).adjustments(identifiers)
+        ranked: list[SearchHit] = []
+        for hit, writing_id in zip(hits, identifiers, strict=True):
+            adjustment = adjustments.get(writing_id, 0.0)
+            payload = dict(hit.payload)
+            payload["feedback_adjustment"] = adjustment
+            quality = payload.get("quality_score")
+            if isinstance(quality, (int, float)):
+                payload["adjusted_quality_score"] = max(0.0, min(1.0, float(quality) + adjustment))
+            ranked.append(
+                dataclasses.replace(
+                    hit,
+                    score=hit.score + adjustment,
+                    payload=payload,
+                )
+            )
+        ranked.sort(key=lambda hit: -hit.score)
+        return ranked
+
     @staticmethod
-    def _code_evidence(
-        hit: SearchHit, filters: Mapping[str, Any], intent: str
-    ) -> SearchHit:
+    def _code_evidence(hit: SearchHit, filters: Mapping[str, Any], intent: str) -> SearchHit:
         payload = dict(hit.payload)
         version = str(payload.get("version") or "")
         if version and version == str(filters.get("target_version") or ""):
@@ -182,4 +222,12 @@ class HubQueryService:
         if isinstance(excerpt, str):
             payload["source_excerpt"] = excerpt[:320]
         payload["return_mode"] = "pattern_first"
+        return dataclasses.replace(hit, payload=payload)
+
+    @staticmethod
+    def _paragraph_structure(hit: SearchHit) -> SearchHit:
+        payload = dict(hit.payload)
+        payload.pop("original_text", None)
+        payload.pop("source_excerpt", None)
+        payload["return_mode"] = "paragraph_structure"
         return dataclasses.replace(hit, payload=payload)

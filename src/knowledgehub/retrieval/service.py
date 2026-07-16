@@ -417,6 +417,12 @@ class RetrievalService:
             raise ValueError("fallback policy must be strict or degrade")
         if not 1 <= request.limit <= 100 or request.prefetch_limit < request.limit:
             raise ValueError("invalid result or prefetch limit")
+        if (
+            request.paragraph_words_min is not None
+            and request.paragraph_words_max is not None
+            and request.paragraph_words_min > request.paragraph_words_max
+        ):
+            raise ValueError("paragraph_words_min cannot exceed paragraph_words_max")
 
     def _response(
         self,
@@ -489,6 +495,9 @@ def _build_filter(request: SearchRequest) -> Any:
         ("section", request.section),
         ("writing_function", request.writing_function),
         ("research_domain", request.research_domain),
+        ("venue", request.venue),
+        ("expression_strength", request.expression_strength),
+        ("tone", request.tone),
     ):
         if value:
             must.append(models.FieldCondition(key=key, match=models.MatchValue(value=value)))
@@ -502,6 +511,23 @@ def _build_filter(request: SearchRequest) -> Any:
         must.append(
             models.FieldCondition(
                 key="year", range=models.Range(gte=request.year_from, lte=request.year_to)
+            )
+        )
+    if request.paragraph_words_min is not None or request.paragraph_words_max is not None:
+        must.append(
+            models.FieldCondition(
+                key="paragraph_word_count",
+                range=models.Range(
+                    gte=request.paragraph_words_min,
+                    lte=request.paragraph_words_max,
+                ),
+            )
+        )
+    if request.contains_math is not None:
+        must.append(
+            models.FieldCondition(
+                key="contains_math",
+                match=models.MatchValue(value=request.contains_math),
             )
         )
     return models.Filter(must=must) if must else None

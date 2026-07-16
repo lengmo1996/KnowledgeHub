@@ -10,6 +10,7 @@ from knowledgehub.indexing.incremental import IncrementalChunkIndexer, IndexInpu
 from knowledgehub.pipeline.config import RagConfig
 from knowledgehub.pipeline.models import ChunkRecord
 from knowledgehub.retrieval.models import SearchHit, SearchResponse
+from knowledgehub.writing_rag.v2 import WritingFeedbackStore
 
 
 class Pool:
@@ -123,7 +124,9 @@ def test_code_intent_and_query_priority() -> None:
             )
 
     config = SimpleNamespace(
-        rag_config=lambda _kb: RagConfig(data_dir=Path("/tmp/test"), gpu_mode="cpu", embedding_dim=2)
+        rag_config=lambda _kb: RagConfig(
+            data_dir=Path("/tmp/test"), gpu_mode="cpu", embedding_dim=2
+        )
     )
     response = HubQueryService(config, service_factory=lambda _: Service()).search(
         HubQueryRequest(
@@ -135,3 +138,53 @@ def test_code_intent_and_query_priority() -> None:
     )
     assert response.hits[0].payload["source_type"] == "release_note"
     assert response.hits[0].payload["evidence_role"] == "target_version_evidence"
+
+
+def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
+    WritingFeedbackStore(tmp_path / "state" / "feedback.sqlite3").submit("w2", "useful")
+
+    class Service:
+        endpoint_pool = SimpleNamespace(close=lambda: None)
+        reranker = None
+
+        def search(self, request):  # type: ignore[no-untyped-def]
+            return SearchResponse(
+                query=request.query,
+                mode="hybrid",
+                collection="writing",
+                embedding_model="m",
+                embedding_revision="r",
+                embedding_dimension=2,
+                reranker_profile="off",
+                reranker_model=None,
+                reranker_revision=None,
+                reranker_fallback=None,
+                hits=(
+                    SearchHit(
+                        point_id="a",
+                        score=0.85,
+                        payload={"writing_id": "w1", "quality_score": 0.6},
+                    ),
+                    SearchHit(
+                        point_id="b",
+                        score=0.8,
+                        payload={"writing_id": "w2", "quality_score": 0.6},
+                    ),
+                ),
+                timings={},
+            )
+
+    config = SimpleNamespace(
+        rag_config=lambda _kb: RagConfig(
+            data_dir=tmp_path,
+            gpu_mode="cpu",
+            embedding_dim=2,
+        ),
+        writing=SimpleNamespace(data_root=tmp_path),
+    )
+    response = HubQueryService(config, service_factory=lambda _: Service()).search(
+        HubQueryRequest(knowledge_base="writing", query="research gap")
+    )
+    assert response.hits[0].payload["writing_id"] == "w2"
+    assert response.hits[0].payload["feedback_adjustment"] == 0.1
+    assert response.hits[0].payload["adjusted_quality_score"] == 0.7

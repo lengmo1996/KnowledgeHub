@@ -91,7 +91,17 @@ def add_hub_parsers(subparsers: Any) -> None:
     query.add_argument("--section")
     query.add_argument("--writing-function")
     query.add_argument("--research-domain")
-    query.add_argument("--return-mode", choices=("pattern_first", "include_original"), default="pattern_first")
+    query.add_argument("--venue")
+    query.add_argument("--expression-strength", choices=("cautious", "moderate", "strong"))
+    query.add_argument("--tone", choices=("neutral", "cautious", "assertive", "critical"))
+    query.add_argument("--paragraph-words-min", type=int)
+    query.add_argument("--paragraph-words-max", type=int)
+    query.add_argument("--contains-math", action=argparse.BooleanOptionalAction, default=None)
+    query.add_argument(
+        "--return-mode",
+        choices=("pattern_first", "paragraph_structure", "include_original"),
+        default="pattern_first",
+    )
     query.add_argument("--mode", choices=("dense", "sparse", "hybrid"), default="hybrid")
     query.add_argument("--reranker", choices=("off", "light", "quality"), default="off")
     query.add_argument("--top-k", type=int, default=10)
@@ -164,26 +174,28 @@ def run_hub_command(args: argparse.Namespace) -> int:
                 timeout_seconds=config.code.timeout_seconds,
                 max_retries=config.code.max_retries,
             )
-            names = [item.name for item in registry.list(enabled_only=True)] if args.all else [args.library]
+            names = (
+                [item.name for item in registry.list(enabled_only=True)]
+                if args.all
+                else [args.library]
+            )
             sync_results = [
                 sync_service.sync(name, version=args.version, dry_run=args.dry_run)
                 for name in names
             ]
             _emit({"results": sync_results})
-            return 0 if all(
-                item["status"] in {"success", "planned"} for item in sync_results
-            ) else 1
+            return (
+                0 if all(item["status"] in {"success", "planned"} for item in sync_results) else 1
+            )
         if args.source == "build":
             rag_config = config.rag_config("code")
             if args.candidate_collection:
                 if args.candidate_collection == config.knowledge_bases["code"].collection:
-                    raise ValueError("candidate collection must differ from the configured production collection")
-                rag_config = rag_config.with_overrides(
-                    qdrant_collection=args.candidate_collection
-                )
-            build_service = CodeBuildService(
-                registry, config.code.data_root, rag_config
-            )
+                    raise ValueError(
+                        "candidate collection must differ from the configured production collection"
+                    )
+                rag_config = rag_config.with_overrides(qdrant_collection=args.candidate_collection)
+            build_service = CodeBuildService(registry, config.code.data_root, rag_config)
             try:
                 build_result = build_service.build(
                     args.library,
@@ -229,6 +241,12 @@ def run_hub_command(args: argparse.Namespace) -> int:
                     "section": args.section,
                     "writing_function": args.writing_function,
                     "research_domain": args.research_domain,
+                    "venue": args.venue,
+                    "expression_strength": args.expression_strength,
+                    "tone": args.tone,
+                    "paragraph_words_min": args.paragraph_words_min,
+                    "paragraph_words_max": args.paragraph_words_max,
+                    "contains_math": args.contains_math,
                 }.items()
                 if value not in (None, (), "")
             }

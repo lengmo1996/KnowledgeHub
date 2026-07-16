@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from knowledgehub.evaluation.metrics import evaluate_rankings
+import pytest
+
+from knowledgehub.evaluation.metrics import evaluate_rankings, evaluate_writing
 from knowledgehub.workflows.repository import RepositoryIntake
 from knowledgehub.writing_rag.v2 import (
     WritingFeedbackStore,
+    WritingProfileStore,
+    WritingTaskPlanner,
+    paragraph_features,
     paragraph_structure,
     similarity_risk,
     writing_profile,
@@ -79,6 +84,8 @@ def test_writing_structure_similarity_profile_and_feedback(tmp_path: Path) -> No
         n=3,
     )
     assert risk["risk_level"] == "high" and risk["legal_plagiarism_assessment"] is False
+    assert risk["layers"]["long_fragment"] == "evaluated"
+    assert risk["layers"]["semantic"] == "not_evaluated"
     profile = writing_profile(
         [{"original_text": "A short paragraph.", "writing_function": "research_gap"}],
         profile_type="venue",
@@ -91,10 +98,71 @@ def test_writing_structure_similarity_profile_and_feedback(tmp_path: Path) -> No
     assert feedback.adjustment("w1") < 0
 
 
+def test_writing_profiles_keep_venue_and_personal_sources_separate(tmp_path: Path) -> None:
+    store = WritingProfileStore(tmp_path / "profiles")
+    entries = [
+        {
+            "source_paper_id": "paper-1",
+            "source_section": "Introduction",
+            "writing_function": "research_gap",
+            "original_text": "However, prior methods remain limited for this challenging setting.",
+            "content_hash": "h1",
+        }
+    ]
+    venue = store.build_venue(
+        entries,
+        name="Selected Venue",
+        paper_ids=["paper-1"],
+        sections=["Introduction"],
+    )
+    assert venue["profile_type"] == "venue"
+    assert venue["evidence_source"] == "user_selected_literature"
+    assert venue["is_normative_rule"] is False
+    assert venue["selection"]["section_families"] == ["introduction"]
+    with pytest.raises(ValueError, match="explicit user-selected"):
+        store.build_venue(entries, name="invalid", paper_ids=[])
+
+    draft = tmp_path / "draft.md"
+    draft.write_text(
+        "We present a deliberately long paragraph from a user supplied draft so that "
+        "the personal profile records stylistic statistics without treating literature "
+        "or venue conventions as the writer's own historical preference.",
+        encoding="utf-8",
+    )
+    personal = store.build_personal(name="My Drafts", drafts=[draft])
+    assert personal["profile_type"] == "personal"
+    assert personal["evidence_source"] == "user_supplied_drafts"
+    assert {item["profile_type"] for item in store.list()} == {"venue", "personal"}
+
+
+def test_writing_task_plan_and_style_facets() -> None:
+    facets = paragraph_features(
+        "However, our results clearly demonstrate a substantial improvement."
+    )
+    assert facets["tone"] == "assertive"
+    assert facets["expression_strength"] == "strong"
+    assert facets["first_person"] is True
+    plan = WritingTaskPlanner().plan(
+        "strengthen_argument",
+        objective="make the evidence chain explicit",
+        text="The result is useful.",
+        filters={"section": "Experiment"},
+    )
+    assert plan["retrieval"]["return_mode"] == "paragraph_structure"
+    assert plan["generation_boundary"].startswith("Writing RAG supplies")
+    with pytest.raises(ValueError, match="requires input text"):
+        WritingTaskPlanner().plan("rewrite_paragraph", objective="rewrite")
+
+
 def test_evaluation_metrics_are_groupable() -> None:
     metrics = evaluate_rankings(
         [{"expected_source": "source_code", "version": "1", "expected_symbol": "A.f"}],
-        [[{"source_type": "release_note", "version": "2"}, {"source_type": "source_code", "version": "1", "symbol": "A.f"}]],
+        [
+            [
+                {"source_type": "release_note", "version": "2"},
+                {"source_type": "source_code", "version": "1", "symbol": "A.f"},
+            ]
+        ],
         k=2,
     )
     assert metrics == {
@@ -103,3 +171,31 @@ def test_evaluation_metrics_are_groupable() -> None:
         "correct_version_recall": 1.0,
         "correct_symbol_recall": 1.0,
     }
+
+    writing = evaluate_writing(
+        [
+            {
+                "expected_function": "research_gap",
+                "expected_section": "Introduction",
+                "expected_domains": ["vision"],
+                "expected_similarity_risk": "high",
+            }
+        ],
+        [
+            {
+                "writing_function": "research_gap",
+                "section": "Introduction",
+                "pattern_transferability_score": 0.8,
+                "source_paper_id": "p1",
+                "source_location": {"paragraph": 1},
+                "accepted": True,
+                "retrieved_domains": ["vision", "language"],
+                "similarity_risk": "medium",
+                "material_ids": ["w1", "w1"],
+            }
+        ],
+    )
+    assert writing["writing_function_accuracy"] == 1.0
+    assert writing["source_traceability_rate"] == 1.0
+    assert writing["duplicate_material_ratio"] == 0.5
+    assert writing["wrong_domain_recall_rate"] == 0.5

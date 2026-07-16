@@ -68,6 +68,22 @@ _PAYLOAD_FIELDS = {
     "quality_score",
     "confidence",
     "return_mode",
+    "original_text",
+    "writing_id",
+    "source_location",
+    "source_collections",
+    "venue",
+    "paragraph_pattern",
+    "moves",
+    "transition_relations",
+    "sentence_roles",
+    "usage_context",
+    "expression_strength",
+    "tone",
+    "paragraph_word_count",
+    "contains_math",
+    "feedback_adjustment",
+    "adjusted_quality_score",
 }
 
 TOOL_DESCRIPTIONS = {
@@ -80,6 +96,7 @@ TOOL_DESCRIPTIONS = {
     "rag_status": "Return sanitized listener, dependency, limits, and build status.",
     "rag_compare_versions": "Retrieve version-labelled official evidence for a code compatibility comparison.",
     "writing_patterns": "Retrieve transferable academic writing patterns with provenance and usage guidance.",
+    "writing_task": "Plan a supported academic writing task and retrieve structured evidence; final prose remains caller-owned.",
     "knowledge_inspect_symbol": "Inspect one version-pinned Python symbol and its static relations.",
     "knowledge_compare_symbols": "Compare one Python symbol across two indexed library versions.",
     "knowledge_analyze_repository": "Statically inspect an allowed local repository without executing or modifying it.",
@@ -120,6 +137,7 @@ class ToolRegistry:
             "rag_status": self._status,
             "rag_compare_versions": self._compare_versions,
             "writing_patterns": self._writing_patterns,
+            "writing_task": self._writing_task,
             "knowledge_inspect_symbol": self._inspect_symbol,
             "knowledge_compare_symbols": self._compare_symbols,
             "knowledge_analyze_repository": self._analyze_repository,
@@ -265,9 +283,7 @@ class ToolRegistry:
         raw = dataclasses.asdict(response)
         warnings = list(raw["warnings"])
         for hit in raw["hits"]:
-            hit["payload"] = _mark_content(
-                dict(hit["payload"]), value.max_chars_per_hit, warnings
-            )
+            hit["payload"] = _mark_content(dict(hit["payload"]), value.max_chars_per_hit, warnings)
         raw["warnings"] = sorted(set(warnings))
         return {"ok": True, "result": raw}
 
@@ -277,18 +293,20 @@ class ToolRegistry:
             query=value.query,
             intent="compatibility",
             limit=value.limit,
-            filters=SearchFilters(**{
-                "library": value.library,
-                "installed_version": value.installed_version,
-                "target_version": value.target_version,
-                "source_types": (
-                    "migration_guide",
-                    "release_note",
-                    "api_documentation",
-                    "source_code",
-                ),
-                "source": None,
-            }),
+            filters=SearchFilters(
+                **{
+                    "library": value.library,
+                    "installed_version": value.installed_version,
+                    "target_version": value.target_version,
+                    "source_types": (
+                        "migration_guide",
+                        "release_note",
+                        "api_documentation",
+                        "source_code",
+                    ),
+                    "source": None,
+                }
+            ),
         )
         return await self._hub_search(search)
 
@@ -299,6 +317,12 @@ class ToolRegistry:
                 "section": value.section,
                 "writing_function": value.writing_function,
                 "research_domain": value.research_domain,
+                "venue": value.venue,
+                "expression_strength": value.expression_strength,
+                "tone": value.tone,
+                "paragraph_words_min": value.paragraph_words_min,
+                "paragraph_words_max": value.paragraph_words_max,
+                "contains_math": value.contains_math,
                 "source": None,
             }.items()
             if item is not None
@@ -311,6 +335,50 @@ class ToolRegistry:
             filters=SearchFilters(**filters),
         )
         return await self._hub_search(search)
+
+    async def _writing_task(self, value: Any) -> dict[str, Any]:
+        from knowledgehub.hub.config import HubConfig
+        from knowledgehub.writing_rag.v2 import WritingTaskPlanner, similarity_risk
+
+        filters = {
+            key: item
+            for key, item in {
+                "section": value.section,
+                "writing_function": value.writing_function,
+                "research_domain": value.research_domain,
+                "venue": value.venue,
+                "expression_strength": value.expression_strength,
+                "tone": value.tone,
+                "paragraph_words_min": value.paragraph_words_min,
+                "paragraph_words_max": value.paragraph_words_max,
+                "contains_math": value.contains_math,
+            }.items()
+            if item is not None
+        }
+        plan = WritingTaskPlanner().plan(
+            value.task,
+            objective=value.query,
+            text=value.text,
+            filters=filters,
+        )
+        retrieval = await self._writing_patterns(value)
+        result = {"plan": plan, "retrieval": retrieval["result"]}
+        if value.task == "audit_source_similarity":
+            config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+            path = config.writing.data_root / "derived" / "writing_entries.jsonl"
+            if not path.is_file():
+                raise ToolError("not_found", "Writing entries were not found.")
+            entries = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            sources = [
+                {"source_id": item["writing_id"], "text": item["original_text"]}
+                for item in entries
+            ]
+            result["similarity_audit"] = similarity_risk(value.text, sources)
+        return {"ok": True, "result": result}
 
     async def _inspect_symbol(self, value: Any) -> dict[str, Any]:
         from knowledgehub.code_rag.symbols import SymbolIndex
@@ -348,12 +416,16 @@ class ToolRegistry:
         allowed = Path(os.environ.get("KH_REPOSITORY_ROOT", Path.cwd())).resolve(strict=True)
         requested = Path(value.repository)
         if requested.is_absolute():
-            raise ToolError("invalid_repository", "Repository must be relative to KH_REPOSITORY_ROOT.")
+            raise ToolError(
+                "invalid_repository", "Repository must be relative to KH_REPOSITORY_ROOT."
+            )
         repository = (allowed / requested).resolve(strict=True)
         try:
             repository.relative_to(allowed)
         except ValueError as exc:
-            raise ToolError("invalid_repository", "Repository is outside the allowed root.") from exc
+            raise ToolError(
+                "invalid_repository", "Repository is outside the allowed root."
+            ) from exc
         if not repository.is_dir():
             raise ToolError("invalid_repository", "Repository must be a directory.")
         config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
@@ -504,13 +576,15 @@ class ToolRegistry:
 
 def _mark_content(payload: dict[str, Any], max_chars: int, warnings: list[str]) -> dict[str, Any]:
     payload = {key: value for key, value in payload.items() if key in _PAYLOAD_FIELDS}
-    text = payload.get("text")
-    if isinstance(text, str):
+    for field in ("text", "original_text", "source_excerpt"):
+        text = payload.get(field)
+        if not isinstance(text, str):
+            continue
         if _INJECTION.search(text):
             warnings.append("possible_prompt_injection_in_retrieved_content")
         if len(text) > max_chars:
-            payload["text"] = text[:max_chars]
-            payload["text_truncated"] = True
+            payload[field] = text[:max_chars]
+            payload[f"{field}_truncated"] = True
             warnings.append("retrieved_text_truncated")
     payload["content_origin"] = "retrieved_document"
     payload["trusted_as_instruction"] = False

@@ -57,7 +57,8 @@ V2 keeps V1 collections and embedding settings while adding explicit schema
 migrations, durable task/lock state, Qdrant snapshots, integrity validation,
 five library-layout adapters, exact symbol relations, signature diffs,
 repository intake, Writing feedback/similarity controls and grouped evaluation
-fixtures.
+fixtures. V2.4 adds paragraph-level moves, combined Writing filters, strictly
+separated Venue/Personal profiles, task plans and feedback-aware ranking.
 
 ```bash
 knowledgehub validate all
@@ -81,6 +82,11 @@ knowledgehub repository record-verification /path/to/repo --name syntax \
   --command "python -m py_compile train.py" --exit-code 0 --output "passed"
 knowledgehub repository finalize /path/to/repo --risk "full training not run"
 knowledgehub writing-v2 similarity "candidate paragraph"
+knowledgehub writing-v2 profile venue NeurIPS-selected --paper-id <paper-id> \
+  --section Introduction --section Method --section Experiment
+knowledgehub writing-v2 profile personal my-drafts --draft manuscript.md
+knowledgehub writing-v2 task strengthen_argument "make evidence explicit" \
+  --text "The method is better." --section Experiment
 knowledgehub sync releases --all --dry-run
 knowledgehub sync version --library diffusers --version 0.37.0 --dry-run
 ```

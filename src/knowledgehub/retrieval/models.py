@@ -35,6 +35,12 @@ class SearchRequest:
     section: str | None = None
     writing_function: str | None = None
     research_domain: str | None = None
+    venue: str | None = None
+    expression_strength: str | None = None
+    tone: str | None = None
+    paragraph_words_min: int | None = None
+    paragraph_words_max: int | None = None
+    contains_math: bool | None = None
     intent: str | None = None
     installed_version: str | None = None
     target_version: str | None = None
