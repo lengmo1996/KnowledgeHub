@@ -75,3 +75,7 @@ are bounded below that window; a future long-running full build should add lock
 renewal before increasing workload size. Direct Python service calls are not
 implicitly wrapped—the durable lifecycle is enforced by the supported CLI
 orchestration paths.
+
+The implementation commit is `709ef262b6186ddd8a58e87ab8b2721c5d55fa27`.
+The separate release commit contains `state/releases/v2_0_2_manifest.json`, so
+the manifest pins implementation without a self-referential Git hash.
