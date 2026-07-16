@@ -9,6 +9,7 @@ from typing import Any, Mapping
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SearchRequest:
     query: str
+    knowledge_base: str = "literature"
     mode: str = "hybrid"
     limit: int = 10
     prefetch_limit: int = 50
@@ -23,6 +24,20 @@ class SearchRequest:
     use_reranker: bool = False
     reranker_profile: str = "off"
     fallback_policy: str = "degrade"
+    library: str | None = None
+    package: str | None = None
+    version: str | None = None
+    source_type: str | None = None
+    source_types: tuple[str, ...] = ()
+    repository: str | None = None
+    path: str | None = None
+    symbol: str | None = None
+    section: str | None = None
+    writing_function: str | None = None
+    research_domain: str | None = None
+    intent: str | None = None
+    installed_version: str | None = None
+    target_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

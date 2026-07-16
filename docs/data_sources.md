@@ -1,0 +1,33 @@
+# Data sources and version policy
+
+## Literature
+
+Literature continues to use Zotero Web API metadata plus the configured
+read-only WebDAV attachment mirror. The published snapshot/delta manifest is
+the only downstream contract. KnowledgeHub does not use the Zotero Desktop
+Local API and does not read `zotero.sqlite`.
+
+## Code
+
+Priority is official repository source, official versioned documentation in
+that repository, then official GitHub Releases. Issues and pull requests are
+disabled by default and reserved for bounded, configured imports. Mirrors,
+unbounded scraping and full Git history are not fallback mechanisms.
+
+The registry supports `installed`, `latest`, `explicit` and `adjacent` version
+strategies. Stable PEP 440 tags are selected, then resolved to an exact tag and
+commit. A missing package does not silently become `latest`; the operator must
+select an explicit or latest strategy.
+
+Include/exclude globs, maximum file size/count, Release limits and optional
+Issue limits are per-library configuration. The initial registry contains
+Python, PyTorch, torchvision, Transformers, Diffusers, Accelerate, Lightning,
+Datasets and Safetensors; only Transformers is enabled by default.
+
+## Compliance and secrets
+
+Source URL, repository, tag/commit, retrieval time and available license file
+name are retained. Localized repositories and papers stay outside Git. GitHub,
+Zotero, WebDAV, embedding and API credentials are environment-only and are
+redacted from environment snapshots and errors. Upstream authentication,
+licensing, rate limits and access controls are never bypassed.

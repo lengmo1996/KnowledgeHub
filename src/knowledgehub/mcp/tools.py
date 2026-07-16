@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 from importlib.metadata import version
 from typing import Any, Awaitable, Callable
@@ -13,7 +14,7 @@ from pydantic import ValidationError
 
 from knowledgehub.mcp.config import MCPConfig
 from knowledgehub.mcp.resilience import CircuitBreaker
-from knowledgehub.mcp.schemas import INPUT_MODELS, SearchInput
+from knowledgehub.mcp.schemas import INPUT_MODELS, SearchFilters, SearchInput
 from knowledgehub.retrieval.models import SearchRequest
 from mcp import types
 
@@ -39,6 +40,33 @@ _PAYLOAD_FIELDS = {
     "title",
     "token_count",
     "year",
+    "knowledge_base",
+    "library",
+    "package",
+    "version",
+    "source_type",
+    "repository",
+    "path",
+    "module",
+    "symbol",
+    "symbol_type",
+    "section",
+    "task_tags",
+    "source_url",
+    "tag",
+    "commit",
+    "evidence_role",
+    "inference",
+    "intent",
+    "writing_function",
+    "research_domain",
+    "abstract_pattern",
+    "rhetorical_structure",
+    "usage_notes",
+    "source_excerpt",
+    "quality_score",
+    "confidence",
+    "return_mode",
 }
 
 TOOL_DESCRIPTIONS = {
@@ -49,6 +77,8 @@ TOOL_DESCRIPTIONS = {
     "rag_resolve_reference": "Resolve exactly one DOI, citation key, Zotero key, or title to candidates.",
     "rag_list_facets": "List paginated collection, tag, year, or source values and counts.",
     "rag_status": "Return sanitized listener, dependency, limits, and build status.",
+    "rag_compare_versions": "Retrieve version-labelled official evidence for a code compatibility comparison.",
+    "writing_patterns": "Retrieve transferable academic writing patterns with provenance and usage guidance.",
 }
 
 
@@ -83,6 +113,8 @@ class ToolRegistry:
             "rag_resolve_reference": self._resolve_reference,
             "rag_list_facets": self._list_facets,
             "rag_status": self._status,
+            "rag_compare_versions": self._compare_versions,
+            "writing_patterns": self._writing_patterns,
         }
 
     def definitions(self) -> list[types.Tool]:
@@ -128,6 +160,8 @@ class ToolRegistry:
         )
 
     async def _search(self, value: SearchInput) -> dict[str, Any]:
+        if value.knowledge_base != "literature":
+            return await self._hub_search(value)
         reranker = value.reranker
         if reranker == "auto":
             reranker = self.service.config.reranker_profile
@@ -135,6 +169,7 @@ class ToolRegistry:
         filters = value.filters
         request = SearchRequest(
             query=value.query,
+            knowledge_base=value.knowledge_base,
             mode=value.mode,
             limit=value.limit,
             prefetch_limit=value.prefetch_limit,
@@ -149,6 +184,19 @@ class ToolRegistry:
             use_reranker=use_reranker,
             reranker_profile=str(reranker),
             fallback_policy=value.fallback,
+            intent=value.intent,
+            library=filters.library,
+            package=filters.package,
+            version=filters.version,
+            installed_version=filters.installed_version,
+            target_version=filters.target_version,
+            source_types=filters.source_types,
+            repository=filters.repository,
+            path=filters.path,
+            symbol=filters.symbol,
+            section=filters.section,
+            writing_function=filters.writing_function,
+            research_domain=filters.research_domain,
         )
         async with self.embedding_semaphore:
             if use_reranker:
@@ -177,6 +225,84 @@ class ToolRegistry:
         raw["hits"] = hits
         raw["warnings"] = sorted(set(warnings))
         return {"ok": True, "result": raw}
+
+    async def _hub_search(self, value: SearchInput) -> dict[str, Any]:
+        if value.neighbors.before or value.neighbors.after:
+            raise ToolError(
+                "unsupported_expansion",
+                "Neighbor expansion is currently available only for Literature results.",
+            )
+        from knowledgehub.hub.config import HubConfig
+        from knowledgehub.hub.query import HubQueryRequest, HubQueryService
+
+        filters = value.filters.model_dump(exclude_none=True)
+        if value.knowledge_base != "literature" and filters.get("source") == "zotero":
+            filters.pop("source", None)
+        config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+        response = await anyio.to_thread.run_sync(
+            lambda: HubQueryService(config).search(
+                HubQueryRequest(
+                    knowledge_base=value.knowledge_base,
+                    query=value.query,
+                    intent=value.intent,
+                    filters=filters,
+                    top_k=value.limit,
+                    prefetch_limit=value.prefetch_limit,
+                    mode=value.mode,
+                    return_mode=value.return_mode,
+                    reranker=value.reranker if value.reranker != "auto" else "off",
+                )
+            )
+        )
+        raw = dataclasses.asdict(response)
+        warnings = list(raw["warnings"])
+        for hit in raw["hits"]:
+            hit["payload"] = _mark_content(
+                dict(hit["payload"]), value.max_chars_per_hit, warnings
+            )
+        raw["warnings"] = sorted(set(warnings))
+        return {"ok": True, "result": raw}
+
+    async def _compare_versions(self, value: Any) -> dict[str, Any]:
+        search = SearchInput(
+            knowledge_base="code",
+            query=value.query,
+            intent="compatibility",
+            limit=value.limit,
+            filters=SearchFilters(**{
+                "library": value.library,
+                "installed_version": value.installed_version,
+                "target_version": value.target_version,
+                "source_types": (
+                    "migration_guide",
+                    "release_note",
+                    "api_documentation",
+                    "source_code",
+                ),
+                "source": None,
+            }),
+        )
+        return await self._hub_search(search)
+
+    async def _writing_patterns(self, value: Any) -> dict[str, Any]:
+        filters = {
+            key: item
+            for key, item in {
+                "section": value.section,
+                "writing_function": value.writing_function,
+                "research_domain": value.research_domain,
+                "source": None,
+            }.items()
+            if item is not None
+        }
+        search = SearchInput(
+            knowledge_base="writing",
+            query=value.query,
+            limit=value.limit,
+            return_mode=value.return_mode,
+            filters=SearchFilters(**filters),
+        )
+        return await self._hub_search(search)
 
     async def _get_chunk(self, value: Any) -> dict[str, Any]:
         chunk = await self.service.aget_chunk(value.chunk_id)

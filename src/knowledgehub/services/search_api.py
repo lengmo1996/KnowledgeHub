@@ -29,6 +29,10 @@ from knowledgehub.retrieval.service import RetrievalService
 class SearchBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1)
+    knowledge_base: str = "literature"
+    intent: str | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+    return_mode: str = "pattern_first"
     mode: str = "hybrid"
     limit: int = Field(default=10, ge=1, le=100)
     prefetch_limit: int = Field(default=50, ge=1, le=500)
@@ -121,7 +125,29 @@ def create_app(
 
     @app.post("/search")
     def search(body: SearchBody, _: None = Depends(authorize)) -> dict[str, Any]:
-        response = holder["service"].search(SearchRequest(**body.model_dump()))
+        if body.knowledge_base != "literature":
+            from knowledgehub.hub.config import HubConfig
+            from knowledgehub.hub.query import HubQueryRequest, HubQueryService
+
+            response = HubQueryService(
+                HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+            ).search(
+                HubQueryRequest(
+                    knowledge_base=body.knowledge_base,
+                    query=body.query,
+                    intent=body.intent,
+                    filters=body.filters,
+                    top_k=body.limit,
+                    prefetch_limit=body.prefetch_limit,
+                    mode=body.mode,
+                    return_mode=body.return_mode,
+                    reranker=body.reranker_profile if body.use_reranker else "off",
+                )
+            )
+            return dataclasses.asdict(response)
+        response = holder["service"].search(
+            SearchRequest(**body.model_dump(exclude={"filters", "return_mode"}))
+        )
         return {
             **dataclasses.asdict(response),
             "hits": [dataclasses.asdict(value) for value in response.hits],

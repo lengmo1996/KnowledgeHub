@@ -59,3 +59,11 @@ HMAC key、上游 API key 或原始异常内容。
 常见 code：`invalid_arguments`、`not_found`、`embedding_unavailable`、`circuit_open`、
 `deadline_exceeded`、`response_too_large`、`unavailable`。认证、Host/Origin 和限流错误由 HTTP 层分别
 映射为 401/403、421/403 和 429。
+# 多知识库扩展
+
+`rag_search` 新增可选 `knowledge_base`（`literature`、`code`、`writing`），
+省略时仍查询 Literature。Code/Writing 可使用版本、来源类型、符号、章节、
+写作功能和研究领域过滤器。另提供只读工具：
+
+- `rag_compare_versions`：返回带版本与证据角色的兼容性资料；
+- `writing_patterns`：默认返回抽象模板、修辞结构、来源短片段和使用提示。

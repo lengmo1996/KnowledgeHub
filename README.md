@@ -7,6 +7,50 @@ manifests. The RAG layer consumes only that contract and implements Docling or
 PyMuPDF parsing, canonical Parquet chunks, explicit single/dual GPU scheduling,
 TEI embeddings, BM25, Qdrant RRF and optional Qwen3 reranking.
 
+## Knowledge bases
+
+KnowledgeHub now exposes three logically isolated knowledge bases while sharing
+Chunk, embedding, Qdrant and retrieval implementations:
+
+- `literature`: the existing Zotero/PDF pipeline and collection, unchanged;
+- `code`: versioned official documentation, examples, source and releases;
+- `writing`: provenance-preserving rhetorical patterns derived from Literature.
+
+The default catalog is `configs/knowledgehub.yaml`. Runtime source data,
+derived records, state and vectors remain under `/data/KnowledgeHub` and are
+ignored by Git. Code and Writing use new collections; the existing
+`zotero_papers_qwen3_4b_1024_v2` collection is never migrated or overwritten.
+
+```bash
+# Inspect configured libraries and capture the current Python environment.
+knowledgehub source list
+knowledgehub source inspect transformers
+knowledgehub environment capture --name rag
+
+# Preview one installed version, or omit --version to include configured adjacent versions.
+knowledgehub sync code --library transformers --version installed --dry-run
+knowledgehub sync code --library transformers
+knowledgehub build code --library transformers --incremental
+
+# Derive a bounded Writing set from existing parsed papers.
+knowledgehub derive writing --limit 5 --dry-run
+knowledgehub derive writing --limit 5
+
+# Query independent collections.
+knowledgehub query literature "retrieval augmented generation"
+knowledgehub query code "Which API changed?" --library transformers --intent compatibility
+knowledgehub query writing "introduce a research gap" --section Introduction --writing-function research_gap
+```
+
+Code sync uses only configured official repositories and the GitHub Releases
+API. `GITHUB_TOKEN` is optional and read only from the environment. It never
+appears in YAML, manifests or logs. Writing defaults to deterministic offline
+rules; model-backed analyzers can implement the stable `WritingAnalyzer`
+protocol without changing stored entries.
+
+See [Code RAG](docs/code_rag.md), [Writing RAG](docs/writing_rag.md),
+[data sources](docs/data_sources.md), and [Skill integration](docs/skill_integration.md).
+
 The source consumes two independent inputs:
 
 - Zotero Web API v3 supplies metadata, relationships, collections, versions,

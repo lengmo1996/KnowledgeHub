@@ -19,7 +19,19 @@ class SearchFilters(StrictModel):
     doi: str | None = Field(default=None, max_length=256)
     document_id: str | None = Field(default=None, max_length=256)
     attachment_key: str | None = Field(default=None, max_length=64)
-    source: Literal["zotero"] = "zotero"
+    source: str | None = Field(default="zotero", max_length=128)
+    library: str | None = Field(default=None, max_length=128)
+    package: str | None = Field(default=None, max_length=128)
+    version: str | None = Field(default=None, max_length=64)
+    installed_version: str | None = Field(default=None, max_length=64)
+    target_version: str | None = Field(default=None, max_length=64)
+    source_types: tuple[str, ...] = Field(default=(), max_length=16)
+    repository: str | None = Field(default=None, max_length=256)
+    path: str | None = Field(default=None, max_length=1000)
+    symbol: str | None = Field(default=None, max_length=512)
+    section: str | None = Field(default=None, max_length=256)
+    writing_function: str | None = Field(default=None, max_length=128)
+    research_domain: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def valid_years(self) -> "SearchFilters":
@@ -34,7 +46,10 @@ class NeighborExpansion(StrictModel):
 
 
 class SearchInput(StrictModel):
+    knowledge_base: Literal["literature", "code", "writing"] = "literature"
     query: str = Field(min_length=1, max_length=4000)
+    intent: str | None = Field(default=None, max_length=64)
+    return_mode: Literal["pattern_first", "include_original"] = "pattern_first"
     mode: Literal["dense", "sparse", "hybrid"] = "hybrid"
     limit: int = Field(default=10, ge=1, le=50)
     prefetch_limit: int = Field(default=50, ge=1, le=200)
@@ -94,6 +109,23 @@ class StatusInput(StrictModel):
     verbose: bool = False
 
 
+class CompareVersionsInput(StrictModel):
+    query: str = Field(min_length=1, max_length=4000)
+    library: str = Field(min_length=1, max_length=128)
+    installed_version: str = Field(min_length=1, max_length=64)
+    target_version: str = Field(min_length=1, max_length=64)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class WritingPatternsInput(StrictModel):
+    query: str = Field(min_length=1, max_length=4000)
+    section: str | None = Field(default=None, max_length=256)
+    writing_function: str | None = Field(default=None, max_length=128)
+    research_domain: str | None = Field(default=None, max_length=128)
+    return_mode: Literal["pattern_first", "include_original"] = "pattern_first"
+    limit: int = Field(default=8, ge=1, le=50)
+
+
 INPUT_MODELS: dict[str, type[StrictModel]] = {
     "rag_search": SearchInput,
     "rag_get_chunk": GetChunkInput,
@@ -102,4 +134,6 @@ INPUT_MODELS: dict[str, type[StrictModel]] = {
     "rag_resolve_reference": ResolveReferenceInput,
     "rag_list_facets": ListFacetsInput,
     "rag_status": StatusInput,
+    "rag_compare_versions": CompareVersionsInput,
+    "writing_patterns": WritingPatternsInput,
 }

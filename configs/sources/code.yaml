@@ -1,0 +1,49 @@
+schema_version: 1
+defaults:
+  enabled: false
+  version_strategy: [installed, adjacent]
+  max_file_bytes: 2000000
+  max_files: 20000
+  max_chunks_per_file: 500
+  include: [README*, LICENSE*, COPYING*, docs/**, examples/**, src/**, CHANGELOG*, RELEASE*, MIGRATION*]
+  exclude: ["**/__pycache__/**", "**/*.png", "**/*.jpg", "**/*.gif", "**/*.bin", "**/tests/fixtures/**"]
+  releases: {enabled: true, limit: 30}
+  issues: {enabled: false, limit: 0}
+libraries:
+  python:
+    package_name: python
+    repository: python/cpython
+    tag_patterns: ["v{version}"]
+  pytorch:
+    package_name: torch
+    repository: pytorch/pytorch
+    tag_patterns: ["v{version}"]
+  torchvision:
+    package_name: torchvision
+    repository: pytorch/vision
+    tag_patterns: ["v{version}"]
+  transformers:
+    enabled: true
+    package_name: transformers
+    repository: huggingface/transformers
+    tag_patterns: ["v{version}", "{version}"]
+  diffusers:
+    package_name: diffusers
+    repository: huggingface/diffusers
+    tag_patterns: ["v{version}", "{version}"]
+  accelerate:
+    package_name: accelerate
+    repository: huggingface/accelerate
+    tag_patterns: ["v{version}", "{version}"]
+  lightning:
+    package_name: lightning
+    repository: Lightning-AI/pytorch-lightning
+    tag_patterns: ["{version}", "v{version}"]
+  datasets:
+    package_name: datasets
+    repository: huggingface/datasets
+    tag_patterns: ["{version}", "v{version}"]
+  safetensors:
+    package_name: safetensors
+    repository: huggingface/safetensors
+    tag_patterns: ["v{version}", "{version}"]

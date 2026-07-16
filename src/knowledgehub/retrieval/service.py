@@ -479,9 +479,25 @@ def _build_filter(request: SearchRequest) -> Any:
         ("doi", request.doi),
         ("tags", request.tag),
         ("collection_keys", request.collection_key),
+        ("library", request.library),
+        ("package", request.package),
+        ("version", request.version),
+        ("source_type", request.source_type),
+        ("repository", request.repository),
+        ("path", request.path),
+        ("symbol", request.symbol),
+        ("section", request.section),
+        ("writing_function", request.writing_function),
+        ("research_domain", request.research_domain),
     ):
         if value:
             must.append(models.FieldCondition(key=key, match=models.MatchValue(value=value)))
+    if request.source_types:
+        must.append(
+            models.FieldCondition(
+                key="source_type", match=models.MatchAny(any=list(request.source_types))
+            )
+        )
     if request.year_from is not None or request.year_to is not None:
         must.append(
             models.FieldCondition(

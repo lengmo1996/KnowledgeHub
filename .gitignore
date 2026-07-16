@@ -44,6 +44,10 @@ venv/
 /chunks/
 /failures/
 /snapshots/
+/sources/
+/normalized/
+/derived/
+/indexes/
 
 # Zotero/WebDAV and extracted binary payloads are never source artifacts.
 *.zip

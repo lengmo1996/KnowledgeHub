@@ -100,9 +100,9 @@ def _assert_strict(schema):  # type: ignore[no-untyped-def]
             _assert_strict(value)
 
 
-def test_all_seven_schemas_are_strict(registry: ToolRegistry) -> None:
+def test_all_nine_schemas_are_strict(registry: ToolRegistry) -> None:
     assert set(INPUT_MODELS) == {value.name for value in registry.definitions()}
-    assert len(INPUT_MODELS) == 7
+    assert len(INPUT_MODELS) == 9
     for tool in registry.definitions():
         _assert_strict(tool.inputSchema)
         assert tool.annotations is not None
