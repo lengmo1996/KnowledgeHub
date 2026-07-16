@@ -28,8 +28,13 @@ class SymbolRecord:
 
 
 class SymbolIndex:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path = path
+        self.read_only = read_only
+        if read_only:
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            return
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with sqlite3.connect(path) as connection:
             connection.executescript(
@@ -87,7 +92,7 @@ class SymbolIndex:
         return {"symbols": len(symbols), "relations": len(relations)}
 
     def inspect(self, library: str, version: str, symbol: str) -> dict[str, Any] | None:
-        with sqlite3.connect(self.path) as connection:
+        with self._connection() as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
                 "SELECT * FROM symbols WHERE library=? AND version=? AND (qualified_name=? OR qualified_name LIKE ?) ORDER BY length(qualified_name) LIMIT 1",
@@ -108,13 +113,18 @@ class SymbolIndex:
         }
 
     def versions(self, library: str, symbol: str) -> list[dict[str, Any]]:
-        with sqlite3.connect(self.path) as connection:
+        with self._connection() as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
                 "SELECT * FROM symbols WHERE library=? AND (qualified_name=? OR qualified_name LIKE ?) ORDER BY version",
                 (library, symbol, f"%.{symbol}"),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def _connection(self) -> sqlite3.Connection:
+        if self.read_only:
+            return sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+        return sqlite3.connect(self.path)
 
 
 def _nodes(tree: ast.AST) -> Iterable[tuple[ast.AST, str | None]]:

@@ -7,6 +7,7 @@ import json
 import os
 import re
 from importlib.metadata import version
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import anyio
@@ -79,6 +80,10 @@ TOOL_DESCRIPTIONS = {
     "rag_status": "Return sanitized listener, dependency, limits, and build status.",
     "rag_compare_versions": "Retrieve version-labelled official evidence for a code compatibility comparison.",
     "writing_patterns": "Retrieve transferable academic writing patterns with provenance and usage guidance.",
+    "knowledge_inspect_symbol": "Inspect one version-pinned Python symbol and its static relations.",
+    "knowledge_compare_symbols": "Compare one Python symbol across two indexed library versions.",
+    "knowledge_analyze_repository": "Statically inspect an allowed local repository without executing or modifying it.",
+    "knowledge_submit_feedback": "Record explicit quality feedback for one derived writing pattern.",
 }
 
 
@@ -115,22 +120,25 @@ class ToolRegistry:
             "rag_status": self._status,
             "rag_compare_versions": self._compare_versions,
             "writing_patterns": self._writing_patterns,
+            "knowledge_inspect_symbol": self._inspect_symbol,
+            "knowledge_compare_symbols": self._compare_symbols,
+            "knowledge_analyze_repository": self._analyze_repository,
+            "knowledge_submit_feedback": self._submit_feedback,
         }
 
     def definitions(self) -> list[types.Tool]:
-        annotations = types.ToolAnnotations(
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        )
         return [
             types.Tool(
                 name=name,
                 title=name.replace("rag_", "KnowledgeHub ").replace("_", " ").title(),
                 description=TOOL_DESCRIPTIONS[name],
                 inputSchema=model.model_json_schema(),
-                annotations=annotations,
+                annotations=types.ToolAnnotations(
+                    readOnlyHint=name != "knowledge_submit_feedback",
+                    destructiveHint=False,
+                    idempotentHint=name != "knowledge_submit_feedback",
+                    openWorldHint=False,
+                ),
             )
             for name, model in INPUT_MODELS.items()
         ]
@@ -139,7 +147,7 @@ class ToolRegistry:
         model_type = INPUT_MODELS.get(name)
         handler = self._handlers.get(name)
         if model_type is None or handler is None:
-            return self._error("unknown_tool", "Unknown read-only tool.", recoverable=False)
+            return self._error("unknown_tool", "Unknown tool.", recoverable=False)
         try:
             parsed = model_type.model_validate(arguments)
             with anyio.fail_after(self.config.request_timeout_seconds):
@@ -303,6 +311,87 @@ class ToolRegistry:
             filters=SearchFilters(**filters),
         )
         return await self._hub_search(search)
+
+    async def _inspect_symbol(self, value: Any) -> dict[str, Any]:
+        from knowledgehub.code_rag.symbols import SymbolIndex
+        from knowledgehub.hub.config import HubConfig
+
+        config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+        path = config.code.data_root / "state" / "symbols.sqlite3"
+        result = SymbolIndex(path, read_only=True).inspect(
+            value.library, value.version, value.symbol
+        )
+        if result is None:
+            raise ToolError("not_found", "Symbol was not found.")
+        return {"ok": True, "result": result}
+
+    async def _compare_symbols(self, value: Any) -> dict[str, Any]:
+        from knowledgehub.code_rag.symbols import SymbolIndex
+        from knowledgehub.code_rag.version_diff import compare_symbols
+        from knowledgehub.hub.config import HubConfig
+
+        config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+        path = config.code.data_root / "state" / "symbols.sqlite3"
+
+        def compare() -> dict[str, Any]:
+            catalog = SymbolIndex(path, read_only=True)
+            old = catalog.inspect(value.library, value.from_version, value.symbol)
+            new = catalog.inspect(value.library, value.to_version, value.symbol)
+            return compare_symbols(old, new)
+
+        return {"ok": True, "result": compare()}
+
+    async def _analyze_repository(self, value: Any) -> dict[str, Any]:
+        from knowledgehub.hub.config import HubConfig
+        from knowledgehub.workflows.repository import RepositoryIntake
+
+        allowed = Path(os.environ.get("KH_REPOSITORY_ROOT", Path.cwd())).resolve(strict=True)
+        requested = Path(value.repository)
+        if requested.is_absolute():
+            raise ToolError("invalid_repository", "Repository must be relative to KH_REPOSITORY_ROOT.")
+        repository = (allowed / requested).resolve(strict=True)
+        try:
+            repository.relative_to(allowed)
+        except ValueError as exc:
+            raise ToolError("invalid_repository", "Repository is outside the allowed root.") from exc
+        if not repository.is_dir():
+            raise ToolError("invalid_repository", "Repository must be a directory.")
+        config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+        environment_path = (
+            config.code.data_root / "state" / "environments" / f"{value.environment}.json"
+        )
+        if not environment_path.is_file():
+            raise ToolError("not_found", "Environment profile was not found.")
+        environment = json.loads(environment_path.read_text(encoding="utf-8"))
+        result = RepositoryIntake(repository).inspect(environment)
+        profile = result["profile"]
+        api_usage = profile["api_usage"]
+        profile["api_usage"] = [
+            {
+                **item,
+                "imports": item["imports"][:50],
+                "symbols": item["symbols"][:50],
+                "files": item["files"][:50],
+                "call_sites": item["call_sites"][:100],
+            }
+            for item in api_usage[:100]
+        ]
+        profile["api_usage_truncated"] = len(api_usage) > 100
+        return {"ok": True, "result": result}
+
+    async def _submit_feedback(self, value: Any) -> dict[str, Any]:
+        from knowledgehub.hub.config import HubConfig
+        from knowledgehub.writing_rag.v2 import WritingFeedbackStore
+
+        config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+        result = WritingFeedbackStore(
+            config.writing.data_root / "state" / "feedback.sqlite3"
+        ).submit(
+            value.writing_id,
+            value.label,
+            value.context.model_dump(exclude_none=True),
+        )
+        return {"ok": True, "result": result}
 
     async def _get_chunk(self, value: Any) -> dict[str, Any]:
         chunk = await self.service.aget_chunk(value.chunk_id)

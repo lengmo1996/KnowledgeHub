@@ -1,7 +1,7 @@
 # KnowledgeHub MCP 工具参考
 
-所有工具均为只读、幂等、closed-world，并返回 `structuredContent` 与紧凑 text fallback。所有对象
-schema 都拒绝未知字段。响应中的文档文本带有：
+MCP 共提供 13 个 closed-world 工具，并返回 `structuredContent` 与紧凑 text fallback。除
+`knowledge_submit_feedback` 外均为只读、幂等；所有对象 schema 都拒绝未知字段。响应中的文档文本带有：
 
 ```json
 {"content_origin":"retrieved_document","trusted_as_instruction":false}
@@ -67,3 +67,13 @@ HMAC key、上游 API key 或原始异常内容。
 
 - `rag_compare_versions`：返回带版本与证据角色的兼容性资料；
 - `writing_patterns`：默认返回抽象模板、修辞结构、来源短片段和使用提示。
+
+## V2 精确知识工具
+
+- `knowledge_inspect_symbol`：按 library/version/symbol 查询只读 Symbol SQLite；
+- `knowledge_compare_symbols`：对两个已索引版本执行确定性签名与 AST 差异比较；
+- `knowledge_analyze_repository`：仅接受 `KH_REPOSITORY_ROOT` 下的相对目录，静态读取声明与
+  Python AST，不执行仓库代码、不写仓库；
+- `knowledge_submit_feedback`：显式写入 Writing feedback SQLite，允许 useful、not_useful、
+  too_generic、too_similar、wrong_function、wrong_domain、poor_style；该调用非幂等但不修改
+  Writing Entry 或论文原文。

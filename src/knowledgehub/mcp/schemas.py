@@ -126,6 +126,44 @@ class WritingPatternsInput(StrictModel):
     limit: int = Field(default=8, ge=1, le=50)
 
 
+class InspectSymbolInput(StrictModel):
+    library: str = Field(min_length=1, max_length=128)
+    version: str = Field(min_length=1, max_length=64)
+    symbol: str = Field(min_length=1, max_length=512)
+
+
+class CompareSymbolsInput(StrictModel):
+    library: str = Field(min_length=1, max_length=128)
+    from_version: str = Field(min_length=1, max_length=64)
+    to_version: str = Field(min_length=1, max_length=64)
+    symbol: str = Field(min_length=1, max_length=512)
+
+
+class AnalyzeRepositoryInput(StrictModel):
+    repository: str = Field(min_length=1, max_length=1000)
+    environment: str = Field(default="current", min_length=1, max_length=128)
+
+
+class FeedbackContext(StrictModel):
+    query: str | None = Field(default=None, max_length=2000)
+    rank: int | None = Field(default=None, ge=1, le=100)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SubmitFeedbackInput(StrictModel):
+    writing_id: str = Field(min_length=1, max_length=256)
+    label: Literal[
+        "useful",
+        "not_useful",
+        "too_generic",
+        "too_similar",
+        "wrong_function",
+        "wrong_domain",
+        "poor_style",
+    ]
+    context: FeedbackContext = Field(default_factory=FeedbackContext)
+
+
 INPUT_MODELS: dict[str, type[StrictModel]] = {
     "rag_search": SearchInput,
     "rag_get_chunk": GetChunkInput,
@@ -136,4 +174,8 @@ INPUT_MODELS: dict[str, type[StrictModel]] = {
     "rag_status": StatusInput,
     "rag_compare_versions": CompareVersionsInput,
     "writing_patterns": WritingPatternsInput,
+    "knowledge_inspect_symbol": InspectSymbolInput,
+    "knowledge_compare_symbols": CompareSymbolsInput,
+    "knowledge_analyze_repository": AnalyzeRepositoryInput,
+    "knowledge_submit_feedback": SubmitFeedbackInput,
 }

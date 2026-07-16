@@ -22,7 +22,13 @@ select an explicit or latest strategy.
 Include/exclude globs, maximum file size/count, Release limits and optional
 Issue limits are per-library configuration. The initial registry contains
 Python, PyTorch, torchvision, Transformers, Diffusers, Accelerate, Lightning,
-Datasets and Safetensors; only Transformers is enabled by default.
+Datasets and Safetensors. The formal V2 registry enables PyTorch, Transformers,
+Diffusers, Accelerate and Lightning; synchronization remains an explicit CLI
+operation and never runs all five on a timer.
+
+`sync releases` reads official Git tags, records the latest stable tag and emits
+`notify` state without downloading it. `sync version` requires
+`--allow-download` before a missing version is fetched and bounded-built.
 
 ## Compliance and secrets
 

@@ -62,14 +62,22 @@ fixtures.
 ```bash
 knowledgehub validate all
 knowledgehub index snapshot code
+knowledgehub build code --library diffusers --version 0.39.0 --limit 20 --candidate-collection knowledgehub_code_candidate_20260716
+knowledgehub index stage code knowledgehub_code_candidate_20260716
+knowledgehub index promote code --yes
+knowledgehub index rollback-alias code --yes
 knowledgehub symbol build transformers 5.13.1
 knowledgehub symbol compare transformers 5.13.0 5.13.1 PreTrainedModel.from_pretrained
 knowledgehub query code "why did this API fail?" --symbol SomeClass.method --explain-plan
-knowledgehub repository analyze /path/to/repo --environment workstation-3090
+knowledgehub repository analyze /path/to/repo --environment workstation-3090 --output-root /data/KnowledgeHub/reports
 knowledgehub writing-v2 similarity "candidate paragraph"
+knowledgehub sync releases --all --dry-run
+knowledgehub sync version --library diffusers --version 0.37.0 --dry-run
 ```
 
-Snapshot rollback is never implicit and requires `--yes`. Repository analysis
+Snapshot and alias rollback are never implicit and require `--yes`. Candidate
+promotion switches a stable Qdrant alias atomically and retains the prior
+physical collection. Repository analysis
 does not execute code or install dependencies. See [V2 architecture](docs/v2_architecture.md)
 and [V2 migration](docs/v2_migration.md).
 

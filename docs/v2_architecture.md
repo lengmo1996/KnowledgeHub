@@ -2,8 +2,10 @@
 
 V2 is additive over the frozen V1 contracts. Governance introduces strict
 schema envelopes, explicit migrations, unified task/idempotency/lock state,
-Qdrant snapshot manifests and cross-domain validation. Existing collections and
-the embedding model are unchanged.
+Qdrant snapshot manifests, candidate collection registration, atomic stable
+aliases and cross-domain validation. Existing physical collections and the
+embedding model are unchanged. A successful promotion writes an alias pointer;
+without that pointer, the original YAML collection remains the query target.
 
 Code intelligence adds five layout adapters, canonical version identities, a
 SQLite exact-symbol catalog, AST relations and deterministic signature diffs.

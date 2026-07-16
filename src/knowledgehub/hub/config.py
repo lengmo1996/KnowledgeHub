@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -105,8 +106,13 @@ class HubConfig:
             selected = self.knowledge_bases[knowledge_base]
         except KeyError as exc:
             raise RagConfigError(f"unknown knowledge base: {knowledge_base}") from exc
+        collection = selected.collection
+        index_root = Path(os.environ.get("KH_INDEX_ROOT", "/data/KnowledgeHub/indexes"))
+        from knowledgehub.governance.snapshots import active_collection
+
+        collection = active_collection(index_root, knowledge_base, collection)
         return RagConfig.load(self.base_rag_config).with_overrides(
             data_dir=selected.data_dir,
-            qdrant_collection=selected.collection,
+            qdrant_collection=collection,
             embedding_query_instruction=selected.query_instruction,
         )

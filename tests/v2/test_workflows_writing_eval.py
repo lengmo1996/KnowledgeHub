@@ -16,11 +16,23 @@ def test_repository_intake_and_conservative_matrix(tmp_path: Path) -> None:
     repo = tmp_path / "demo"
     repo.mkdir()
     (repo / "requirements.txt").write_text("torch>=2.0,<2.2\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["transformers>=5"]\n[tool.ruff]\nselect = ["E4"]\n',
+        encoding="utf-8",
+    )
+    (repo / "setup.py").write_text(
+        '_deps = ["accelerate>=1", "ignored; python_version < \'3.0\'"]\n',
+        encoding="utf-8",
+    )
     (repo / "train.py").write_text("import torch\ntorch.compile(model)\n", encoding="utf-8")
     result = RepositoryIntake(repo).analyze(
         {"name": "current", "packages": {"torch": "2.6.0"}}, tmp_path / "reports"
     )
-    assert result["compatibility_matrix"][0]["status"] == "conflict"
+    matrix = {item["package"]: item for item in result["compatibility_matrix"]}
+    assert matrix["torch"]["status"] == "conflict"
+    assert "accelerate" in matrix
+    assert "E4" not in matrix
+    assert "ignored" not in matrix
     assert result["profile"]["api_usage"][0]["library"] == "torch"
     assert Path(result["report"]).is_file()
 

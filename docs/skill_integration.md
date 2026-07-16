@@ -20,9 +20,24 @@ The stable entry point is the unified query request:
 
 `rag_search` accepts this route while remaining backward compatible: omitted
 `knowledge_base` means Literature. `rag_compare_versions` is the convenience
-tool for code reproduction/adaptation/debugging Skills. Results include version,
+tool for code reproduction/adaptation/debugging Skills. Exact symbol workflows
+use `knowledge_inspect_symbol` and `knowledge_compare_symbols`. Results include version,
 commit, location, source URL and `evidence_role`; callers must label their own
 inferences separately.
+
+```json
+{
+  "library": "transformers",
+  "from_version": "5.13.0",
+  "to_version": "5.13.1",
+  "symbol": "PreTrainedModel.from_pretrained"
+}
+```
+
+Repository-adaptation Skills may call `knowledge_analyze_repository` with a
+path relative to `KH_REPOSITORY_ROOT` and a captured environment name. The tool
+is static and read-only; it returns declaration-based compatibility evidence,
+not a runtime guarantee.
 
 For academic-writing, manuscript-audit and reviewer-response Skills use
 `writing_patterns` or `rag_search` with `knowledge_base=writing`:
@@ -43,6 +58,12 @@ rhetorical structure, usage notes, short source excerpt and source paper. Skills
 should adapt patterns to the user's claims, avoid copying source expressions and
 request original text only for audit or close contextual analysis.
 
+After the user evaluates a pattern, `knowledge_submit_feedback` accepts one of
+the documented labels plus bounded query/rank/note context. It is the only V2
+MCP extension that writes state and is explicitly non-idempotent; it never
+changes the source paper or Writing entry.
+
 When serving MCP outside Literature-only mode, set `KH_HUB_CONFIG` to the local
 catalog path and ensure the separate Code/Writing collections and embedding
-endpoint are available. All tools remain read-only.
+endpoint are available. Set `KH_REPOSITORY_ROOT` before enabling repository
+inspection. All tools except explicit feedback submission remain read-only.

@@ -10,6 +10,7 @@ from typing import Any
 
 from knowledgehub.code_rag.build import CodeBuildService
 from knowledgehub.code_rag.environment import EnvironmentCapture
+from knowledgehub.code_rag.maintenance import OnDemandVersionImporter, ReleaseWatchService
 from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.hub.config import HubConfig
@@ -42,6 +43,16 @@ def add_hub_parsers(subparsers: Any) -> None:
     sync_code.add_argument("--version")
     sync_code.add_argument("--all", action="store_true")
     sync_code.add_argument("--dry-run", action="store_true")
+    sync_releases = sync_commands.add_parser("releases")
+    sync_releases.add_argument("--library", default="transformers")
+    sync_releases.add_argument("--all", action="store_true")
+    sync_releases.add_argument("--dry-run", action="store_true")
+    sync_version = sync_commands.add_parser("version")
+    sync_version.add_argument("--library", required=True)
+    sync_version.add_argument("--version", required=True)
+    sync_version.add_argument("--allow-download", action="store_true")
+    sync_version.add_argument("--build-limit", type=int, default=20)
+    sync_version.add_argument("--dry-run", action="store_true")
 
     build = subparsers.add_parser("build", help="Build a derived knowledge index")
     build_commands = build.add_subparsers(dest="build_domain", required=True)
@@ -50,6 +61,10 @@ def add_hub_parsers(subparsers: Any) -> None:
     build_code.add_argument("--version")
     build_code.add_argument("--incremental", action="store_true")
     build_code.add_argument("--limit", type=int)
+    build_code.add_argument(
+        "--candidate-collection",
+        help="Build into an explicit physical candidate before index stage/promote",
+    )
     build_code.add_argument("--dry-run", action="store_true")
     build_code.add_argument("--prune", action="store_true")
 
@@ -120,6 +135,28 @@ def run_hub_command(args: argparse.Namespace) -> int:
             _emit(result)
             return 0
         if args.source == "sync":
+            if args.sync_domain == "releases":
+                names = (
+                    [item.name for item in registry.list(enabled_only=True)]
+                    if args.all
+                    else [args.library]
+                )
+                results = [
+                    ReleaseWatchService(config, registry).check(name, dry_run=args.dry_run)
+                    for name in names
+                ]
+                _emit({"results": results})
+                return 0
+            if args.sync_domain == "version":
+                result = OnDemandVersionImporter(config, registry).import_version(
+                    args.library,
+                    args.version,
+                    allowed=args.allow_download,
+                    build_limit=args.build_limit,
+                    dry_run=args.dry_run,
+                )
+                _emit(result)
+                return 0 if result["status"] != "permission_required" else 2
             sync_service = CodeSyncService(
                 registry,
                 config.code.data_root,
@@ -137,8 +174,15 @@ def run_hub_command(args: argparse.Namespace) -> int:
                 item["status"] in {"success", "planned"} for item in sync_results
             ) else 1
         if args.source == "build":
+            rag_config = config.rag_config("code")
+            if args.candidate_collection:
+                if args.candidate_collection == config.knowledge_bases["code"].collection:
+                    raise ValueError("candidate collection must differ from the configured production collection")
+                rag_config = rag_config.with_overrides(
+                    qdrant_collection=args.candidate_collection
+                )
             build_service = CodeBuildService(
-                registry, config.code.data_root, config.rag_config("code")
+                registry, config.code.data_root, rag_config
             )
             try:
                 build_result = build_service.build(

@@ -9,6 +9,7 @@ import yaml
 
 from knowledgehub.code_rag.chunking import CodeChunker
 from knowledgehub.code_rag.environment import EnvironmentCapture
+from knowledgehub.code_rag.maintenance import OnDemandVersionImporter, ReleaseWatchService
 from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.core.hashing import sha256_text
@@ -159,3 +160,41 @@ def test_release_rate_limit_is_explicit_partial_success(tmp_path: Path, monkeypa
     assert result["status"] == "partial"
     assert result["release_error"] == "github_releases_http_403"
     assert result["results"][0]["commit"] == "a" * 40
+
+
+def test_release_watch_never_downloads_and_on_demand_requires_permission(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_value = {
+        "schema_version": 1,
+        "defaults": {"include": ["README*"], "version_strategy": ["latest"]},
+        "libraries": {
+            "example": {
+                "enabled": True,
+                "package_name": "example-not-installed",
+                "repository": "owner/example",
+            }
+        },
+    }
+    registry_path = tmp_path / "registry.yaml"
+    registry_path.write_text(yaml.safe_dump(config_value), encoding="utf-8")
+    registry = CodeSourceRegistry.load(registry_path)
+    config = SimpleNamespace(
+        code=SimpleNamespace(
+            data_root=tmp_path / "data",
+            github_token_env="GITHUB_TOKEN",
+            timeout_seconds=1,
+            max_retries=0,
+        )
+    )
+    monkeypatch.setattr(
+        CodeSyncService, "_remote_tags", lambda _self, _library: ["v1.0.0", "v2.0.0rc1"]
+    )
+    watched = ReleaseWatchService(config, registry).check("example")
+    assert watched["latest_tag"] == "v1.0.0"
+    assert watched["action"] == "notify" and watched["auto_downloaded"] is False
+    assert (tmp_path / "data" / "state" / "release-watch" / "example.json").is_file()
+    denied = OnDemandVersionImporter(config, registry).import_version(
+        "example", "1.0.0", allowed=False
+    )
+    assert denied["status"] == "permission_required"

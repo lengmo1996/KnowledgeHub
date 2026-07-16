@@ -10,7 +10,7 @@ from typing import Any
 from knowledgehub.code_rag.adapters import adapter_for
 from knowledgehub.code_rag.symbols import SymbolIndex
 from knowledgehub.code_rag.version_diff import compare_symbols
-from knowledgehub.governance.snapshots import IndexSnapshotManager
+from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexSnapshotManager
 from knowledgehub.governance.tasks import TaskStore
 from knowledgehub.governance.validation import HubValidator
 from knowledgehub.hub.config import HubConfig
@@ -29,6 +29,17 @@ def add_v2_parsers(subparsers: Any) -> None:
     rollback.add_argument("knowledge_base", choices=("literature", "code", "writing"))
     rollback.add_argument("snapshot_id")
     rollback.add_argument("--yes", action="store_true")
+    stage = commands.add_parser("stage", help="Register a populated physical candidate")
+    stage.add_argument("knowledge_base", choices=("literature", "code", "writing"))
+    stage.add_argument("candidate_collection")
+    promote = commands.add_parser("promote", help="Atomically move the stable alias")
+    promote.add_argument("knowledge_base", choices=("literature", "code", "writing"))
+    promote.add_argument("--yes", action="store_true")
+    alias_rollback = commands.add_parser("rollback-alias")
+    alias_rollback.add_argument("knowledge_base", choices=("literature", "code", "writing"))
+    alias_rollback.add_argument("--yes", action="store_true")
+    alias_status = commands.add_parser("alias-status")
+    alias_status.add_argument("knowledge_base", choices=("literature", "code", "writing"))
 
     task = subparsers.add_parser("task", help="Inspect unified tasks or force-unlock a resource")
     task_commands = task.add_subparsers(dest="task_command", required=True)
@@ -61,6 +72,7 @@ def add_v2_parsers(subparsers: Any) -> None:
     analyze = repository_commands.add_parser("analyze")
     analyze.add_argument("path", type=Path)
     analyze.add_argument("--environment", default="current")
+    analyze.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
 
     writing = subparsers.add_parser("writing-v2", help="Writing similarity and feedback operations")
     writing_commands = writing.add_subparsers(dest="writing_v2_command", required=True)
@@ -81,11 +93,20 @@ def run_v2_command(args: argparse.Namespace) -> int:
             QdrantClient(url=config.rag_config(args.knowledge_base).qdrant_url),
         )
         collection = config.knowledge_bases[args.knowledge_base].collection
+        promotion = CollectionPromotionManager(Path("/data/KnowledgeHub/indexes"), manager.client)
         if args.index_command == "snapshot":
             return _emit(manager.create(args.knowledge_base, collection))
         if args.index_command == "list-snapshots":
             return _emit({"snapshots": manager.list(args.knowledge_base)})
-        return _emit(manager.rollback(args.knowledge_base, args.snapshot_id, confirmed=args.yes))
+        if args.index_command == "rollback":
+            return _emit(manager.rollback(args.knowledge_base, args.snapshot_id, confirmed=args.yes))
+        if args.index_command == "stage":
+            return _emit(promotion.stage(args.knowledge_base, args.candidate_collection))
+        if args.index_command == "promote":
+            return _emit(promotion.promote(args.knowledge_base, collection, confirmed=args.yes))
+        if args.index_command == "rollback-alias":
+            return _emit(promotion.rollback(args.knowledge_base, confirmed=args.yes))
+        return _emit(promotion.status(args.knowledge_base, collection))
     if args.source == "task":
         store = TaskStore(Path("/data/KnowledgeHub/state/tasks.sqlite3"))
         if args.task_command == "list":
@@ -113,7 +134,24 @@ def run_v2_command(args: argparse.Namespace) -> int:
     if args.source == "repository":
         environment_path = config.code.data_root / "state" / "environments" / f"{args.environment}.json"
         environment = json.loads(environment_path.read_text(encoding="utf-8"))
-        return _emit(RepositoryIntake(args.path).analyze(environment, Path("reports")))
+        result = RepositoryIntake(args.path).analyze(environment, args.output_root)
+        profile = result["profile"]
+        return _emit(
+            {
+                "repository": profile["repository"],
+                "version": profile.get("version"),
+                "commit": profile.get("commit"),
+                "dependencies": len(profile["dependencies"]),
+                "api_libraries": len(profile["api_usage"]),
+                "compatibility_statuses": {
+                    status: sum(
+                        item["status"] == status for item in result["compatibility_matrix"]
+                    )
+                    for status in ("likely_compatible", "conflict", "unknown")
+                },
+                "report": result["report"],
+            }
+        )
     if args.source == "writing-v2":
         if args.writing_v2_command == "feedback":
             return _emit(WritingFeedbackStore(config.writing.data_root / "state" / "feedback.sqlite3").submit(args.writing_id, args.label))
