@@ -27,3 +27,16 @@ Qdrant health, aliases and point counts are separate read-only observations so
 a temporarily unavailable service cannot be mistaken for config drift. The
 manifest records the completed pre-freeze implementation commit; the commit
 that contains the manifest is the release commit, which avoids self-reference.
+
+V2.0.1 closes the index-integrity acceptance gap with a read-only chain:
+
+```text
+source record -> domain SQLite state -> Chunk artifact -> Qdrant point
+```
+
+The validator checks active/tombstone consistency, content and Metadata hashes,
+artifact naming, contiguous Chunk indexes, duplicate IDs, source provenance,
+point counts and bidirectional point membership. `validate index code|writing`
+checks Qdrant by default; `--offline` stops at local artifacts. `validate all`
+includes both indexes. Frozen `rules-v1` Writing identity is resolved from
+`document_id`, while newer `metadata.writing_id` values are checked when present.

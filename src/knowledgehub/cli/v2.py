@@ -122,7 +122,15 @@ def add_v2_parsers(subparsers: Any) -> None:
     validate = subparsers.add_parser(
         "validate", help="Validate cross-domain source and derived integrity"
     )
-    validate.add_argument("target", choices=("sources", "normalized", "writing", "all"))
+    validate.add_argument(
+        "target", choices=("sources", "normalized", "writing", "index", "all")
+    )
+    validate.add_argument("knowledge_base", nargs="?", choices=("code", "writing"))
+    validate.add_argument(
+        "--offline",
+        action="store_true",
+        help="Validate local state and artifacts without contacting Qdrant",
+    )
 
     symbol = subparsers.add_parser(
         "symbol", help="Build, inspect or compare the Python symbol catalog"
@@ -329,8 +337,53 @@ def run_v2_command(args: argparse.Namespace) -> int:
         store.release(args.lock_key, force=args.force)
         return _emit({"status": "unlocked", "lock_key": args.lock_key})
     if args.source == "validate":
-        validator = HubValidator(config.code.data_root, config.writing.data_root)
-        result = getattr(validator, args.target)()
+        validator = HubValidator(
+            config.code.data_root,
+            config.writing.data_root,
+            rag_dirs={
+                "code": config.knowledge_bases["code"].data_dir,
+                "writing": config.knowledge_bases["writing"].data_dir,
+            },
+        )
+        if args.target == "index" and args.knowledge_base is None:
+            return _emit_error("knowledge_base is required for index validation")
+        if args.target != "index" and args.knowledge_base is not None:
+            return _emit_error("knowledge_base is valid only with target=index")
+        validation_names: tuple[str, ...]
+        if args.target == "index":
+            validation_names = (str(args.knowledge_base),)
+        elif args.target == "all":
+            validation_names = ("code", "writing")
+        else:
+            validation_names = ()
+        clients: dict[str, Any] = {}
+        indexes: dict[str, tuple[Any | None, str | None]] = {}
+        try:
+            if not args.offline:
+                from qdrant_client import QdrantClient
+
+                for name in validation_names:
+                    rag_config = config.rag_config(name)
+                    client = QdrantClient(url=rag_config.qdrant_url)
+                    clients[name] = client
+                    indexes[name] = (client, rag_config.qdrant_collection)
+            if args.target == "index":
+                knowledge_base = str(args.knowledge_base)
+                client, validation_collection = indexes.get(
+                    knowledge_base, (None, None)
+                )
+                result = validator.index(
+                    knowledge_base,
+                    qdrant_client=client,
+                    collection=validation_collection,
+                )
+            elif args.target == "all":
+                result = validator.all(indexes=indexes)
+            else:
+                result = getattr(validator, args.target)()
+        finally:
+            for client in clients.values():
+                client.close()
         _emit(result)
         return 0 if result["valid"] else 1
     if args.source == "symbol":
@@ -583,3 +636,8 @@ def run_v2_command(args: argparse.Namespace) -> int:
 def _emit(value: Any) -> int:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str))
     return 0
+
+
+def _emit_error(message: str) -> int:
+    _emit({"valid": False, "errors": [message]})
+    return 2

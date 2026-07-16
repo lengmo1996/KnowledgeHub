@@ -67,6 +67,24 @@ The final read-only runtime check observed Literature 190,131 points, Code
 [release operations guide](docs/v2_release.md) for scope, evidence, known
 limits and optional operator checks.
 
+V2.0.1 adds end-to-end read-only index validation. It checks the domain SQLite
+state, source manifests, Chunk artifacts and every Qdrant point without
+repairing or rebuilding data:
+
+```bash
+knowledgehub validate index code
+knowledgehub validate index writing
+knowledgehub validate all
+
+# Skip Qdrant when only local integrity is required.
+knowledgehub validate index code --offline
+knowledgehub validate all --offline
+```
+
+Frozen `rules-v1` Writing chunks identify entries through `document_id`; newer
+chunks may additionally carry `metadata.writing_id`. Both representations are
+validated without rewriting the active Writing index.
+
 ## V2 governance and code intelligence
 
 V2 keeps V1 collections and embedding settings while adding explicit schema

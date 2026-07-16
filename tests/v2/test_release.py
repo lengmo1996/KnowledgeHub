@@ -77,5 +77,5 @@ def test_release_cli_is_offline_and_has_safe_defaults() -> None:
     assert args.repository_root == Path(".")
 
 
-def test_package_version_marks_v2_release() -> None:
-    assert __version__ == "0.2.0"
+def test_package_version_marks_current_v2_patch() -> None:
+    assert __version__ == "0.2.1"

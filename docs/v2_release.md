@@ -60,6 +60,12 @@ Do not use `build`, `derive`, `index promote`, `rollback`, `clean --execute` or
 `prune --execute` merely to validate a release. Those commands change derived
 or runtime state and require a separate operational decision.
 
+From V2.0.1, `validate all` performs read-only Qdrant membership checks in
+addition to local source/state/artifact checks. Use `validate all --offline`
+when Qdrant is intentionally stopped. An offline result includes
+`qdrant_not_checked`; it verifies local integrity but does not claim collection
+point consistency.
+
 ## Rollback and compatibility
 
 V1 data and collection names remain valid. Stable query defaults still select
