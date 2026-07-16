@@ -57,6 +57,13 @@ tone and strength, first-person/passive usage, list/math/contribution/figure and
 analysis-expression rates, transitions, terminology and abbreviations. Raw
 personal paragraphs are not copied into the profile.
 
+From `writing-profile-v2.5`, length and minimum-paragraph checks use
+language-aware lexical units: Latin words and CJK characters. Chinese sentence
+punctuation, common transitions and analysis/strength markers are recognized;
+frequent Chinese terminology is represented by deterministic character
+bigrams. This keeps multilingual drafts from being silently reduced to their
+embedded English examples.
+
 ## Writing tasks
 
 The stable tasks are `retrieve_patterns`, `generate_outline`,
@@ -91,6 +98,10 @@ and are re-ranked without modifying or deleting source entries.
 knowledgehub writing-v2 similarity "candidate paragraph"
 knowledgehub writing-v2 feedback <writing-id> too_similar
 ```
+
+Query responses always expose `payload.writing_id`. For the frozen `rules-v1`
+index this is a response-only alias of its canonical `document_id`; no Qdrant
+payload is rewritten. Pass that value unchanged to the feedback command.
 
 Changing from `rules-v1` to `rules-v2` creates version-distinct Writing IDs.
 There is no automatic full-library derivation; use an explicit paper,

@@ -233,6 +233,10 @@ class HubQueryService:
     @staticmethod
     def _writing_metadata(hit: SearchHit) -> SearchHit:
         payload = dict(hit.payload)
+        if not payload.get("writing_id") and payload.get("document_id"):
+            # Frozen rules-v1 points use document_id as the canonical Writing
+            # identity. Normalize only the response; never rewrite the index.
+            payload["writing_id"] = payload["document_id"]
         inferred = _infer_writing_domains(payload)
         if inferred:
             payload["inferred_research_domain"] = sorted(inferred)

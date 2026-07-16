@@ -52,6 +52,9 @@ venv/
 /derived/
 /indexes/
 
+# Explicitly supplied Personal Writing Profile drafts stay local.
+/personal-writing-profile*.md
+
 # Zotero/WebDAV and extracted binary payloads are never source artifacts.
 *.zip
 *.prop

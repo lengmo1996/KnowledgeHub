@@ -123,6 +123,13 @@ never presented as proof that every listed package is installed at runtime.
 See the [V2.0.3 completion report](docs/V2_PATCH_3_REPORT.md) for the frozen
 runtime evidence and external-input boundaries.
 
+V2.0.4 adds multilingual Personal Profile analysis. Chinese paragraphs,
+sentence punctuation and deterministic CJK style/terminology features are
+included instead of silently analyzing only embedded English examples. Legacy
+`rules-v1` Writing query responses also expose `payload.writing_id` as a
+response-only alias of `document_id`, making feedback commands uniform without
+rewriting the frozen Writing collection.
+
 ## V2 governance and code intelligence
 
 V2 keeps V1 collections and embedding settings while adding explicit schema

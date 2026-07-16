@@ -31,6 +31,18 @@ _TRANSITION = re.compile(
     r"in contrast|for example|specifically|thus|although|despite)\b",
     re.I,
 )
+_LEXICAL_TOKEN = re.compile(
+    r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*|[\u3400-\u4dbf\u4e00-\u9fff]"
+)
+_CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+_CJK_FIRST_PERSON = re.compile(r"(?:我们|本人|我)")
+_CJK_PASSIVE = re.compile(
+    r"(?:被|受到|由[^\uff0c\u3002\uff01\uff1f]{0,20}(?:完成|执行|实现|进行))"
+)
+_CJK_CAUTIOUS = re.compile(r"(?:可能|或许|似乎|表明|建议|需要进一步|尚需|不确定)")
+_CJK_STRONG = re.compile(r"(?:显然|明显|完全|证明|始终|必然|显著)")
+_CJK_CRITICAL = re.compile(r"(?:失败|缺点|不足|严重|根本性限制|局限)")
+_CJK_TRANSITION = re.compile(r"(?:然而|因此|此外|进一步|相反|例如|具体而言|尽管|虽然|但是)")
 _STOP_WORDS = {
     "about",
     "after",
@@ -69,12 +81,32 @@ WritingTask = Literal[
 ]
 
 
-def paragraph_structure(text: str, section: str) -> dict[str, Any]:
-    sentences = [
+def _lexical_tokens(text: str) -> list[str]:
+    """Return deterministic Latin words and individual CJK lexical units."""
+    return _LEXICAL_TOKEN.findall(text)
+
+
+def _sentences(text: str) -> list[str]:
+    return [
         value.strip()
-        for value in re.split(r"(?<=[.!?])\s+", " ".join(text.split()))
+        for value in re.split(r"(?<=[.!?\u3002\uff01\uff1f])\s*", text)
         if value.strip()
     ]
+
+
+def _profile_terms(text: str) -> list[str]:
+    terms = [
+        token.lower()
+        for token in re.findall(r"\b[A-Za-z][A-Za-z-]{3,}\b", text)
+        if token.lower() not in _STOP_WORDS
+    ]
+    for run in _CJK_RUN.findall(text):
+        terms.extend(run[index : index + 2] for index in range(len(run) - 1))
+    return terms
+
+
+def paragraph_structure(text: str, section: str) -> dict[str, Any]:
+    sentences = _sentences(" ".join(text.split()))
     roles: list[str] = []
     for sentence in sentences:
         lowered = sentence.lower()
@@ -102,11 +134,11 @@ def paragraph_features(text: str) -> dict[str, Any]:
     """Return deterministic style facets suitable for filtering and profiles."""
 
     normalized = " ".join(text.split())
-    words = re.findall(r"[A-Za-z0-9'-]+", normalized)
-    sentences = [value for value in re.split(r"(?<=[.!?])\s+", normalized) if value.strip()]
-    cautious = len(_CAUTIOUS.findall(normalized))
-    strong = len(_STRONG.findall(normalized))
-    critical = len(_CRITICAL.findall(normalized))
+    words = _lexical_tokens(normalized)
+    sentences = _sentences(normalized)
+    cautious = len(_CAUTIOUS.findall(normalized)) + len(_CJK_CAUTIOUS.findall(normalized))
+    strong = len(_STRONG.findall(normalized)) + len(_CJK_STRONG.findall(normalized))
+    critical = len(_CRITICAL.findall(normalized)) + len(_CJK_CRITICAL.findall(normalized))
     if strong > cautious:
         strength = "strong"
     elif cautious > strong:
@@ -126,23 +158,31 @@ def paragraph_features(text: str) -> dict[str, Any]:
         "expression_strength": strength,
         "tone": tone,
         "contains_math": bool(_MATH.search(normalized)),
-        "first_person": bool(_FIRST_PERSON.search(normalized)),
-        "passive_voice": bool(_PASSIVE.search(normalized)),
-        "transition_markers": [value.lower() for value in _TRANSITION.findall(normalized)],
+        "first_person": bool(
+            _FIRST_PERSON.search(normalized) or _CJK_FIRST_PERSON.search(normalized)
+        ),
+        "passive_voice": bool(_PASSIVE.search(normalized) or _CJK_PASSIVE.search(normalized)),
+        "transition_markers": [
+            *[value.lower() for value in _TRANSITION.findall(normalized)],
+            *_CJK_TRANSITION.findall(normalized),
+        ],
         "mean_sentence_words": round(len(words) / max(1, len(sentences)), 2),
         "bullet_or_numbered": bool(re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)", text.strip())),
         "contribution_expression": bool(
             re.search(
                 r"\b(?:we (?:propose|present|introduce)|our contributions?)\b", normalized, re.I
             )
+            or re.search(r"(?:我们|本文)(?:提出|介绍|引入)", normalized)
         ),
         "figure_table_reference": bool(
             re.search(r"\b(?:fig(?:ure)?|table)\s*\d+", normalized, re.I)
+            or re.search(r"(?:图|表)\s*[一二三四五六七八九十\d]+", normalized)
         ),
         "analysis_expression": bool(
             re.search(
                 r"\b(?:results? (?:show|indicate|suggest)|because|we observe)\b", normalized, re.I
             )
+            or re.search(r"(?:结果|实验)(?:表明|显示)|由于|我们观察到", normalized)
         ),
         "abbreviations": re.findall(r"\b[A-Z][A-Z0-9-]{1,9}\b", normalized),
     }
@@ -250,16 +290,15 @@ def writing_profile(
     rows = list(entries)
     if not rows:
         raise ValueError("a writing profile requires at least one selected sample")
-    lengths = [len(str(row.get("original_text") or "").split()) for row in rows]
     functions = Counter(str(row.get("writing_function") or "unknown") for row in rows)
     sections = Counter(str(row.get("source_section") or "unknown") for row in rows)
     features = [paragraph_features(str(row.get("original_text") or "")) for row in rows]
+    lengths = [int(item["paragraph_word_count"]) for item in features]
     transitions = Counter(value for item in features for value in item["transition_markers"])
     terms = Counter(
-        token.lower()
+        token
         for row in rows
-        for token in re.findall(r"\b[A-Za-z][A-Za-z-]{3,}\b", str(row.get("original_text") or ""))
-        if token.lower() not in _STOP_WORDS
+        for token in _profile_terms(str(row.get("original_text") or ""))
     )
     abbreviations = Counter(value for item in features for value in item["abbreviations"])
     source_ids = sorted(
@@ -274,7 +313,7 @@ def writing_profile(
         "name": name,
         "source_ids": source_ids,
         "content_hashes": sorted(str(row.get("content_hash") or "") for row in rows),
-        "processor": "writing-profile-v2.4",
+        "processor": "writing-profile-v2.5",
     }
     return {
         "schema_name": "writing_profile",
@@ -314,7 +353,7 @@ def writing_profile(
         if profile_type == "venue"
         else "user_supplied_drafts",
         "is_normative_rule": False,
-        "processor_version": "writing-profile-v2.4",
+        "processor_version": "writing-profile-v2.5",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -384,7 +423,7 @@ class WritingProfileStore:
             paragraphs = re.split(r"\n\s*\n", selected.read_text(encoding="utf-8"))
             for index, paragraph in enumerate(paragraphs, 1):
                 text = " ".join(paragraph.split())
-                if len(text.split()) < 20:
+                if len(_lexical_tokens(text)) < 20:
                     continue
                 rows.append(
                     {

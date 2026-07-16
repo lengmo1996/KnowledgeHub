@@ -135,6 +135,25 @@ def test_writing_profiles_keep_venue_and_personal_sources_separate(tmp_path: Pat
     assert {item["profile_type"] for item in store.list()} == {"venue", "personal"}
 
 
+def test_personal_profile_supports_chinese_paragraphs(tmp_path: Path) -> None:
+    draft = tmp_path / "draft-zh.md"
+    draft.write_text(
+        "本文关注红外视觉与跨模态图像生成, 并强调准确性、逻辑结构和可执行性。"
+        "对于没有实验支持的结论, 需要进一步验证并明确标记不确定内容。\n\n"
+        "实验结果表明该方法可能改善目标检测性能, 但是仍需在更多数据集上验证。"
+        "因此, 技术说明应给出具体参数、执行步骤、风险和验收条件。",
+        encoding="utf-8",
+    )
+    profile = WritingProfileStore(tmp_path / "profiles").build_personal(
+        name="Chinese Draft", drafts=[draft]
+    )
+    assert profile["sample_count"] == 2
+    assert profile["processor_version"] == "writing-profile-v2.5"
+    assert profile["mean_sentence_words"] > 0
+    assert profile["analysis_expression_rate"] == 0.5
+    assert profile["common_terms"]
+
+
 def test_writing_task_plan_and_style_facets() -> None:
     facets = paragraph_features(
         "However, our results clearly demonstrate a substantial improvement."

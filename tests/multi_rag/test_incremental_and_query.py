@@ -163,12 +163,12 @@ def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
                     SearchHit(
                         point_id="a",
                         score=0.85,
-                        payload={"writing_id": "w1", "quality_score": 0.6},
+                        payload={"document_id": "w1", "quality_score": 0.6},
                     ),
                     SearchHit(
                         point_id="b",
                         score=0.8,
-                        payload={"writing_id": "w2", "quality_score": 0.6},
+                        payload={"document_id": "w2", "quality_score": 0.6},
                     ),
                 ),
                 timings={},
