@@ -1,0 +1,1 @@
+{"query":"An imported symbol no longer exists after an upgrade","library":"transformers","version":"5.13.1","environment":"current","expected_source":"source_code","expected_symbol":null,"expected_conclusion":"Inspect exact current and target symbols before editing imports.","difficulty":"hard","notes":"Synthetic."}

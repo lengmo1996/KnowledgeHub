@@ -26,6 +26,9 @@ venv/
 # KnowledgeHub runtime state must stay outside the repository.
 /data/
 /state/
+!/state/
+!/state/releases/
+!/state/releases/v1_manifest.json
 /raw/
 /extracted/
 /manifests/

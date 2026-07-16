@@ -1,0 +1,1 @@
+{"query":"How is a pretrained model loaded?","library":"transformers","version":"5.13.1","environment":"current","expected_source":"api_documentation","expected_symbol":"PreTrainedModel.from_pretrained","expected_conclusion":"Use the documented pretrained loading API.","difficulty":"medium","notes":"Public synthetic regression fixture."}

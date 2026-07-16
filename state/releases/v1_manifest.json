@@ -1,0 +1,24 @@
+{
+  "schema_name": "knowledgehub_release_manifest",
+  "schema_version": "1.0",
+  "release": "v1",
+  "frozen_at": "2026-07-16T17:20:00+08:00",
+  "git_commit": "a15ae0e311e66b7f35cc03c214fa8776344b2d48",
+  "config_hashes": {
+    "configs/knowledgehub.yaml": "466e990eb945a96c8ac272f1bfc3f7f4f5e21e64b09470a38e44cd6d2a7fde29",
+    "configs/sources/code.yaml": "73060599f1729ec7794546274eaf6942760ad86583dc28e8bba8367977b612b9",
+    "configs/rag/default.yaml": "6a57d115b1f5a7f1be6c924b733ef2cb562a4b46d0e78bc0614c244d804f9dba"
+  },
+  "embedding": {
+    "model": "Qwen/Qwen3-Embedding-4B",
+    "revision": "5cf2132abc99cad020ac570b19d031efec650f2b",
+    "dimension": 1024
+  },
+  "indexes": {
+    "literature": {"collection": "zotero_papers_qwen3_4b_1024_v2", "points": 190131},
+    "code": {"collection": "knowledgehub_code_qwen3_4b_1024_v1", "points": 429},
+    "writing": {"collection": "knowledgehub_writing_qwen3_4b_1024_v1", "points": 134}
+  },
+  "tests": {"passed": 278, "failed": 0},
+  "knowledge_bases": ["literature", "code", "writing"]
+}

@@ -8,6 +8,7 @@ from typing import Sequence
 
 from knowledgehub.cli.hub import add_hub_parsers, run_hub_command
 from knowledgehub.cli.rag import add_rag_parser, run_rag_command
+from knowledgehub.cli.v2 import add_v2_parsers, run_v2_command
 from knowledgehub.mcp.cli import add_mcp_parser, run_mcp_command
 from knowledgehub.sources.zotero.cli import add_zotero_parser, run_zotero_command
 
@@ -27,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_rag_parser(subparsers)
     add_mcp_parser(subparsers)
     add_hub_parsers(subparsers)
+    add_v2_parsers(subparsers)
     return parser
 
 
@@ -41,6 +43,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_mcp_command(args)
     if args.source in {"source", "environment", "sync", "build", "derive", "query"}:
         return run_hub_command(args)
+    if args.source in {"index", "task", "validate", "symbol", "repository", "writing-v2"}:
+        return run_v2_command(args)
     parser.error(f"Unsupported source: {args.source}")
 
 

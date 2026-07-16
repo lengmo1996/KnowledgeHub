@@ -1,0 +1,1 @@
+{"query":"Compare repository torch requirements to an environment","library":"pytorch","version":"2.6.0","environment":"current","expected_source":"repository_profile","expected_symbol":null,"expected_conclusion":"A declaration mismatch is a conflict; a match is only likely compatible.","difficulty":"medium","notes":"Synthetic."}

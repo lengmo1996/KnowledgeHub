@@ -1,0 +1,1 @@
+{"query":"What changed in Transformers v5 requirements?","library":"transformers","version":"5.13.1","environment":"current","expected_source":"migration_guide","expected_symbol":null,"expected_conclusion":"Use migration and release evidence for changed dependencies.","difficulty":"easy","notes":"Validated by the V1 bounded index."}
