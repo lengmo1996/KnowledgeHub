@@ -1,0 +1,206 @@
+{
+  "schema_name": "knowledgehub_release_manifest",
+  "schema_version": "2.0",
+  "release": "v2.0.3",
+  "package_version": "0.2.3",
+  "base_release": "v2.0.2",
+  "base_release_commit": "b8e5066e1b835d112c643d3ed54a08c867ec1c33",
+  "frozen_at": "2026-07-17T00:04:18+08:00",
+  "implementation_commit": "a2dcdbb0993c43ebe48dfe5577d65f45d9d35ca4",
+  "release_commit_policy": "The release commit is the Git commit containing this manifest; implementation_commit identifies the completed patch implementation without creating a self-referential hash.",
+  "changes": [
+    "Added active task-lock heartbeat, atomic lease renewal and fail-closed lease-loss behavior.",
+    "Added fixed-commit static dependency manifests and aggregate integrity validation.",
+    "Added bounded incremental source-diff documents with deterministic annotation and return changes.",
+    "Added read-only adaptation session audits and one pinned version-diff evaluation case."
+  ],
+  "config_hashes": {
+    "configs/knowledgehub.yaml": "31c3a7e1adb8d7f3b236f8d742b1838e1a9dbe76b4310a95dc71b8334e30c09c",
+    "configs/sources/code.yaml": "b963e1e1fa6ed5142bb5b2df7600f4d03752887cc20d4eaae770db7488cf4446",
+    "configs/rag/default.yaml": "6a57d115b1f5a7f1be6c924b733ef2cb562a4b46d0e78bc0614c244d804f9dba",
+    "configs/evaluation/offline.yaml": "e3b1a683d07176dde0e78d2f5df1abab8c61b39d036772011c5ddd139de88a05",
+    "configs/evaluation/v2.yaml": "a8949833e25a996717bd274bb24f92282e34485e152470ec4200b7fa112083b9"
+  },
+  "embedding": {
+    "model": "Qwen/Qwen3-Embedding-4B",
+    "revision": "5cf2132abc99cad020ac570b19d031efec650f2b",
+    "dimension": 1024,
+    "changed_from_v2_0_2": false
+  },
+  "indexes": {
+    "literature": {
+      "collection": "zotero_papers_qwen3_4b_1024_v2",
+      "points": 190131,
+      "evidence": "Read-only exact count remained green; no V2.0.3 Literature write or rebuild occurred."
+    },
+    "code": {
+      "collection": "knowledgehub_code_qwen3_4b_1024_v1",
+      "stable_alias": "knowledgehub_code_current",
+      "points": 1118,
+      "documents": 124,
+      "evidence": "Four bounded version-diff documents added 12 Chunks; state, artifacts and every Qdrant point matched and were green."
+    },
+    "writing": {
+      "collection": "knowledgehub_writing_qwen3_4b_1024_v1",
+      "points": 134,
+      "documents": 134,
+      "processor_version": "rules-v1",
+      "evidence": "Read-only validation matched all derived entries, artifacts and Qdrant points; no rebuild occurred."
+    }
+  },
+  "runtime_integrity": {
+    "valid": true,
+    "checked_at": "2026-07-17T00:02:00+08:00",
+    "checks": {
+      "sources": 7,
+      "normalized": 124,
+      "dependencies": 5,
+      "writing": 134
+    },
+    "index_checks": {
+      "code_documents": 124,
+      "code_chunks": 1118,
+      "code_qdrant_points": 1118,
+      "writing_documents": 134,
+      "writing_chunks": 134,
+      "writing_qdrant_points": 134,
+      "literature_qdrant_points": 190131
+    },
+    "errors": 0
+  },
+  "task_governance": {
+    "state_schema": "tasks plus attempts plus actively renewed expiring locks",
+    "heartbeat_default": "min(60 seconds, ttl/3)",
+    "renewal_behavior": "atomic lock-set renewal; lease loss fails closed",
+    "tracked_task_types_added": [
+      "symbol_build",
+      "code_diff_build",
+      "dependency_capture"
+    ],
+    "completed_tasks": 9,
+    "running_tasks": 0,
+    "residual_locks": 0,
+    "real_diff_task_id": "304e925a-143b-4123-96b6-f8b93daf53ac"
+  },
+  "dependency_manifests": {
+    "valid": true,
+    "count": 5,
+    "records": {
+      "pytorch@2.11.0": 23,
+      "transformers@5.13.1": 86,
+      "diffusers@0.39.0": 54,
+      "accelerate@1.14.0": 7,
+      "lightning@2.6.5": 3
+    },
+    "setup_execution": false,
+    "catalog_is_runtime_claim": false
+  },
+  "version_diff": {
+    "library": "transformers",
+    "from_version": "5.13.0",
+    "to_version": "5.13.1",
+    "documents": 4,
+    "chunks": 12,
+    "processor_version": "code-version-diff-v1",
+    "evidence_role": "system_derived_source_diff",
+    "query_validation": "_LazyAutoMapping.register returned the expected key annotation change and both pinned commits."
+  },
+  "adaptation_audits": [
+    {
+      "repository": "cloneofsimo/lora",
+      "commit": "d84074b3e3496f1cfa8a3f49b8b9972ef463b483",
+      "evidence_packages": 1,
+      "changes": 1,
+      "verifications": 2,
+      "valid": true
+    },
+    {
+      "repository": "state-spaces/s4",
+      "commit": "e757cef57d89e448c413de7325ed5601aceaac13",
+      "evidence_packages": 1,
+      "changes": 1,
+      "verifications": 2,
+      "valid": true
+    }
+  ],
+  "evaluation": {
+    "offline_groups": 11,
+    "live_groups": 11,
+    "samples": 24,
+    "failed_groups": 0,
+    "live_report_sha256": "0f283be629b1ce5eb9b4ae20cb78c92fbfd80944fbac503ae5332c79593be4a5",
+    "comparison_report_sha256": "41173e0cf8345a83095f32f771a835f19a9b4e54934d0323ab41fe6c5496ec80",
+    "regression_gates_passed": true,
+    "human_labels_available": false
+  },
+  "writing_profiles": {
+    "venue_profiles": 1,
+    "venue_samples": 62,
+    "personal_profiles": 0,
+    "reason_personal_absent": "No user-owned draft corpus was supplied; no profile was fabricated."
+  },
+  "source_pins": [
+    {
+      "library": "accelerate",
+      "version": "1.14.0",
+      "commit": "beb0672aa8444ea7647aee056f624effe5996346"
+    },
+    {
+      "library": "diffusers",
+      "version": "0.39.0",
+      "commit": "a3608b512ed7248499a44c61d954965ed9bdae4d"
+    },
+    {
+      "library": "lightning",
+      "version": "2.6.5",
+      "commit": "be98784a1a03581b7051a355ae1084fd352d7cea"
+    },
+    {
+      "library": "pytorch",
+      "version": "2.11.0",
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45"
+    },
+    {
+      "library": "transformers",
+      "version": "5.13.0",
+      "commit": "6af945f436d85f2b0c5dff9b14feccd27b1d470b"
+    },
+    {
+      "library": "transformers",
+      "version": "5.13.1",
+      "commit": "4626421dc6b741a329300682a6408246ee465490"
+    },
+    {
+      "library": "transformers",
+      "version": "5.14.0",
+      "commit": "2fa8c195a03938aa148febcc5a696435b4327a47"
+    }
+  ],
+  "interfaces": {
+    "cli_groups": 19,
+    "mcp_tools": 15,
+    "evidence_schema": "query_result@2.0",
+    "legacy_defaults_preserved": true
+  },
+  "tests": {
+    "passed": 341,
+    "failed": 0,
+    "ruff": "passed",
+    "mypy": "passed",
+    "diff_check": "passed"
+  },
+  "knowledge_bases": [
+    "literature",
+    "code",
+    "writing"
+  ],
+  "known_limits": [
+    "Direct Python service calls are not implicitly task-wrapped; supported CLI orchestration paths enforce governance.",
+    "The active Writing index remains the frozen 134-entry rules-v1 collection.",
+    "No user-owned draft corpus or human acceptance labels were supplied; Personal Profile and acceptance metrics remain external-input work.",
+    "The Transformers source-diff build is bounded to four documents and is not exhaustive compatibility coverage.",
+    "Static dependency manifests do not resolve environments or prove catalog and optional packages are installed.",
+    "The two adaptation sessions do not claim full training, dataset, custom CUDA kernel or GPU validation.",
+    "KnowledgeHub does not start a background scheduler or automatically sync all configured libraries."
+  ]
+}

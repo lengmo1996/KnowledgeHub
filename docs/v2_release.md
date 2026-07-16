@@ -1,9 +1,10 @@
 # KnowledgeHub V2 release freeze
 
-KnowledgeHub V2.0.2 is the current frozen patch. The machine-readable source of
-truth is `state/releases/v2_0_2_manifest.json`; it records the pre-freeze
+KnowledgeHub V2.0.3 is the current frozen patch. The machine-readable source of
+truth is `state/releases/v2_0_3_manifest.json`; it records the pre-freeze
 implementation commit, configuration hashes, pinned upstream commits, index
-evidence, interface counts, evaluation gates, cleanup audit and known limits.
+evidence, interface counts, evaluation gates, dependency/source-diff evidence,
+adaptation audits and known limits.
 The Git commit containing the manifest is the release commit, avoiding a
 self-referential commit hash inside the same file.
 
@@ -12,6 +13,8 @@ The original V2.0.0 boundary remains immutable in
 historical release.
 
 V2.0.1 also remains immutable in `state/releases/v2_0_1_manifest.json`.
+
+V2.0.2 also remains immutable in `state/releases/v2_0_2_manifest.json`.
 
 ## Deterministic validation
 
@@ -38,7 +41,7 @@ The final read-only check used the configured Qdrant endpoint
 | Knowledge base | Physical collection | Points | State |
 |---|---|---:|---|
 | Literature | `zotero_papers_qwen3_4b_1024_v2` | 190,131 | green |
-| Code | `knowledgehub_code_qwen3_4b_1024_v1` | 1,106 | green |
+| Code | `knowledgehub_code_current` | 1,118 | green |
 | Writing | `knowledgehub_writing_qwen3_4b_1024_v1` | 134 | green |
 
 `knowledgehub_code_current` points to the Code collection. The V2 freeze did
@@ -57,9 +60,11 @@ docker compose -f deploy/qdrant/compose.yaml --profile core up -d qdrant
 
 knowledgehub release validate
 knowledgehub validate all
+knowledgehub validate dependencies --offline
 knowledgehub index alias-status code
 knowledgehub evaluate run --mode offline --profile v2 --output /tmp/kh-v2-offline.json
 knowledgehub evaluate run --mode live --profile v2 --output /tmp/kh-v2-live.json
+knowledgehub repository validate /path/to/repository --output-root /data/KnowledgeHub/reports
 ```
 
 Do not use `build`, `derive`, `index promote`, `rollback`, `clean --execute` or

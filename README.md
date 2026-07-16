@@ -120,6 +120,8 @@ knowledgehub repository validate /path/to/repo \
 `setup.py` is parsed only as AST. Literal `install_requires` is declared
 dependency evidence; `_deps` tables are explicitly catalog evidence and are
 never presented as proof that every listed package is installed at runtime.
+See the [V2.0.3 completion report](docs/V2_PATCH_3_REPORT.md) for the frozen
+runtime evidence and external-input boundaries.
 
 ## V2 governance and code intelligence
 
