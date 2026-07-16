@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import httpx
 import yaml
 
+from knowledgehub.code_rag.build import CodeBuildService
 from knowledgehub.code_rag.chunking import CodeChunker
 from knowledgehub.code_rag.environment import EnvironmentCapture
 from knowledgehub.code_rag.maintenance import OnDemandVersionImporter, ReleaseWatchService
@@ -15,6 +16,8 @@ from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.core.hashing import sha256_text
 from knowledgehub.core.models import KnowledgeDocument
+from knowledgehub.indexing.incremental import IndexBuildSummary
+from knowledgehub.pipeline.config import RagConfig
 
 
 def _document(content: str, *, source_type: str, path: str) -> KnowledgeDocument:
@@ -107,6 +110,81 @@ def test_sync_fixed_tag_from_temporary_git_repository(tmp_path: Path) -> None:
     assert len(item["commit"]) == 40
     assert (Path(item["source_path"]) / "src" / "api.py").is_file()
     assert not (Path(item["source_path"]) / ".git").exists()
+
+
+def test_candidate_build_keeps_canonical_normalized_manifest_unchanged(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "registry.yaml"
+    registry_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "defaults": {
+                    "enabled": True,
+                    "include": ["README*"],
+                    "exclude": [],
+                    "releases": {"enabled": False, "limit": 0},
+                },
+                "libraries": {
+                    "example": {
+                        "package_name": "example",
+                        "repository": "owner/example",
+                        "tag_patterns": ["v{version}"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    data_root = tmp_path / "data"
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "README.md").write_text("# First\n", encoding="utf-8")
+    marker = data_root / "sources" / "repositories" / "example" / "1.0" / "current.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "commit": "a" * 40,
+                "repository": "owner/example",
+                "retrieved_at": "2026-01-01T00:00:00+00:00",
+                "source_path": str(source_root),
+                "tag": "v1.0",
+                "version": "1.0",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class NoopIndexer:
+        def build(self, values: list[object], **_kwargs: object) -> IndexBuildSummary:
+            return IndexBuildSummary(knowledge_base="code", selected=len(values))
+
+        def close(self) -> None:
+            pass
+
+    service = CodeBuildService(
+        CodeSourceRegistry.load(registry_path),
+        data_root,
+        RagConfig(data_dir=tmp_path / "rag", embedding_dim=2, gpu_mode="cpu"),
+        indexer=NoopIndexer(),  # type: ignore[arg-type]
+    )
+    canonical_result = service.build("example", version="1.0", limit=1)
+    canonical = Path(canonical_result["normalized_manifest"])
+    before = canonical.read_bytes()
+    (source_root / "README.md").write_text("# Candidate\n", encoding="utf-8")
+    candidate_result = service.build(
+        "example",
+        version="1.0",
+        limit=1,
+        normalized_namespace="candidate/test",
+    )
+    candidate = Path(candidate_result["normalized_manifest"])
+    assert canonical.read_bytes() == before
+    assert candidate != canonical
+    assert candidate.is_relative_to(data_root / ".staging" / "normalized")
+    assert candidate.read_bytes() != before
 
 
 def test_release_rate_limit_is_explicit_partial_success(tmp_path: Path, monkeypatch) -> None:

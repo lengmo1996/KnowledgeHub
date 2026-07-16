@@ -1,0 +1,28 @@
+schema_version: 1
+base_rag_config: configs/rag/default.yaml
+knowledge_bases:
+  literature:
+    data_dir: /data/KnowledgeHub/rag/zotero
+    collection: zotero_papers_qwen3_4b_1024_v2
+    query_instruction: Given a research question, retrieve relevant passages from academic papers that answer the question.
+  code:
+    data_dir: /tmp/kh-v2-validation-fix/rag/code
+    collection: knowledgehub_code_validation_20260717
+    query_instruction: Given a software engineering question, retrieve versioned official documentation, examples, source code and release evidence.
+  writing:
+    data_dir: /tmp/kh-v2-validation/rag/writing
+    collection: knowledgehub_writing_validation_20260717
+    query_instruction: Given an academic writing need, retrieve transferable rhetorical patterns and usage guidance.
+code:
+  data_root: /data/KnowledgeHub/code
+  registry: configs/sources/code.yaml
+  github_token_env: GITHUB_TOKEN
+  timeout_seconds: 60
+  max_retries: 3
+writing:
+  data_root: /tmp/kh-v2-validation/writing
+  literature_data_dir: /data/KnowledgeHub/rag/zotero
+  analyzer: rules
+  processor_version: rules-v2-validation
+  default_limit: 3
+  minimum_quality: 0.45

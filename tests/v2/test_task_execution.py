@@ -93,6 +93,29 @@ def test_executor_failure_is_recorded_and_next_attempt_is_a_retry(tmp_path: Path
     ]
 
 
+def test_executor_interrupt_is_recorded_and_releases_locks(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+
+    def interrupt() -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        TaskExecutor(store).execute(
+            "code_build",
+            interrupt,
+            knowledge_base="code",
+            library="demo",
+            inputs={"limit": None},
+            lock_keys=("library:demo", "index:code:test"),
+        )
+    task = store.list_tasks()[0]
+    assert task["status"] == "failed"
+    assert task["error_summary"] == "KeyboardInterrupt:"
+    assert store.list_attempts(task["task_id"])[0]["status"] == "failed"
+    with store.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM locks").fetchone()[0] == 0
+
+
 def test_equivalent_running_task_is_rejected_without_overwriting_owner(
     tmp_path: Path,
 ) -> None:

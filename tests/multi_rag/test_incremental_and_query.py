@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from knowledgehub.code_rag.symbols import SymbolIndex
 from knowledgehub.core.hashing import sha256_text
 from knowledgehub.core.models import KnowledgeDocument
 from knowledgehub.hub.query import HubQueryRequest, HubQueryService, classify_code_intent
@@ -138,6 +139,65 @@ def test_code_intent_and_query_priority() -> None:
     )
     assert response.hits[0].payload["source_type"] == "release_note"
     assert response.hits[0].payload["evidence_role"] == "target_version_evidence"
+
+
+def test_code_query_merges_user_requested_exact_symbol(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    module = source / "src" / "pkg" / "model.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        "class Model:\n    def run(self, value: int = 1) -> int:\n        return value\n",
+        encoding="utf-8",
+    )
+    data_root = tmp_path / "code"
+    SymbolIndex(data_root / "state" / "symbols.sqlite3").build(
+        "demo", "1.0", source, [module]
+    )
+    marker = data_root / "sources" / "repositories" / "demo" / "1.0" / "current.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        '{"repository":"owner/demo","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
+        encoding="utf-8",
+    )
+
+    class EmptyService:
+        endpoint_pool = SimpleNamespace(close=lambda: None)
+        reranker = None
+
+        def search(self, request):  # type: ignore[no-untyped-def]
+            return SearchResponse(
+                query=request.query,
+                mode="hybrid",
+                collection="code",
+                embedding_model="m",
+                embedding_revision="r",
+                embedding_dimension=2,
+                reranker_profile="off",
+                reranker_model=None,
+                reranker_revision=None,
+                reranker_fallback=None,
+                hits=(),
+                timings={},
+            )
+
+    config = SimpleNamespace(
+        code=SimpleNamespace(data_root=data_root),
+        rag_config=lambda _kb: RagConfig(
+            data_dir=tmp_path / "rag", gpu_mode="cpu", embedding_dim=2
+        ),
+    )
+    response = HubQueryService(config, service_factory=lambda _: EmptyService()).search(
+        HubQueryRequest(
+            knowledge_base="code",
+            query="How do I call Model.run?",
+            filters={"library": "demo", "version": "1.0", "symbol": "Model.run"},
+        )
+    )
+    assert len(response.hits) == 1
+    assert response.hits[0].payload["symbol"] == "Model.run"
+    assert response.hits[0].payload["qualified_symbol"] == "src.pkg.model.Model.run"
+    assert response.hits[0].payload["path"] == "src/pkg/model.py"
+    assert response.hits[0].payload["evidence_role"] == "exact_symbol_source"
 
 
 def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:

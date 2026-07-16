@@ -9,6 +9,7 @@ from knowledgehub.evaluation.metrics import evaluate_code
 from knowledgehub.evaluation.runner import (
     EvaluationRunner,
     QueryOutcome,
+    _live_query_filters,
     compare_reports,
     load_thresholds,
     write_report,
@@ -84,6 +85,21 @@ def test_live_evaluation_uses_observed_hits_not_fixture_oracles() -> None:
     writing = report["groups"]["writing/pattern_retrieval"]["metrics"]
     assert writing["function_recall_at_k"] == 1.0
     assert writing["source_traceability_rate"] == 1.0
+
+
+def test_live_query_filters_never_use_expected_answers_as_inputs() -> None:
+    sample = {
+        "library": "demo",
+        "version": "1.0",
+        "symbol": "Requested.symbol",
+        "expected_symbol": "Expected.only",
+        "expected_function": "research_gap",
+    }
+    assert _live_query_filters(sample) == {
+        "library": "demo",
+        "version": "1.0",
+        "symbol": "Requested.symbol",
+    }
 
 
 def test_report_comparison_is_fail_closed_and_persisted(tmp_path: Path) -> None:

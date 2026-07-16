@@ -452,6 +452,22 @@ def report_manifest(path: Path) -> dict[str, Any]:
     return {"path": str(path), "sha256": sha256_file(path), "run_id": value.get("run_id")}
 
 
+def _live_query_filters(sample: Mapping[str, Any]) -> dict[str, Any]:
+    """Build request inputs without consulting expected scoring labels."""
+    return {
+        key: value
+        for key, value in {
+            "library": sample.get("library"),
+            "version": sample.get("version"),
+            "symbol": sample.get("symbol"),
+            "section": sample.get("section"),
+            "writing_function": sample.get("writing_function"),
+            "research_domain": sample.get("research_domain"),
+        }.items()
+        if value is not None
+    }
+
+
 def live_query_callback(config: Any) -> QueryCallback:
     """Build a V1-direct/V2-routed query callback against existing collections."""
 
@@ -465,17 +481,7 @@ def live_query_callback(config: Any) -> QueryCallback:
         from knowledgehub.retrieval.models import SearchRequest
         from knowledgehub.services.search_api import build_retrieval
 
-        filters = {
-            key: value
-            for key, value in {
-                "library": sample.get("library"),
-                "version": sample.get("version"),
-                "section": sample.get("section"),
-                "writing_function": sample.get("expected_function"),
-                "research_domain": sample.get("research_domain"),
-            }.items()
-            if value is not None
-        }
+        filters = _live_query_filters(sample)
         started = time.monotonic()
         if profile == "v2":
             response = HubQueryService(config).search(
@@ -507,10 +513,6 @@ def live_query_callback(config: Any) -> QueryCallback:
                 if reranker is not None:
                     reranker.close()
         hits = [dict(hit.payload) for hit in response.hits]
-        if profile == "v2" and domain == "code" and sample.get("expected_symbol"):
-            symbol_hit = _exact_symbol_evidence(config, sample)
-            if symbol_hit is not None:
-                hits.insert(0, symbol_hit)
         return QueryOutcome(
             tuple(hits[:top_k]),
             time.monotonic() - started,
@@ -518,54 +520,6 @@ def live_query_callback(config: Any) -> QueryCallback:
         )
 
     return query
-
-
-def _exact_symbol_evidence(
-    config: Any, sample: Mapping[str, Any]
-) -> dict[str, Any] | None:
-    from knowledgehub.code_rag.symbols import SymbolIndex
-
-    library = str(sample.get("library") or "")
-    version = str(sample.get("version") or "")
-    symbol = str(sample.get("expected_symbol") or "")
-    if not library or not version or not symbol:
-        return None
-    path = config.code.data_root / "state" / "symbols.sqlite3"
-    if not path.is_file():
-        return None
-    value = SymbolIndex(path, read_only=True).inspect(library, version, symbol)
-    if value is None:
-        return None
-    marker_path = (
-        config.code.data_root
-        / "sources"
-        / "repositories"
-        / library
-        / version
-        / "current.json"
-    )
-    marker = (
-        json.loads(marker_path.read_text(encoding="utf-8"))
-        if marker_path.is_file()
-        else {}
-    )
-    repository = str(marker.get("repository") or "")
-    commit = str(marker.get("commit") or "")
-    source_path = str(value.get("path") or "")
-    source_url = (
-        f"https://github.com/{repository}/blob/{commit}/{source_path}"
-        if repository and commit and source_path
-        else ""
-    )
-    return dict(value) | {
-        "source_type": "source_code",
-        "symbol": symbol,
-        "repository": repository,
-        "commit": commit,
-        "source_url": source_url,
-        "evidence_role": "exact_symbol_evidence",
-        "inference": False,
-    }
 
 
 def _rate(numerator: int | float, denominator: int) -> float:

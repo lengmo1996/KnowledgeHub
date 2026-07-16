@@ -1,0 +1,46 @@
+{
+  "captured_at": "2026-07-17T01:14:24+08:00",
+  "os": "Ubuntu 22.04.5 LTS",
+  "kernel": "6.8.0-134-generic",
+  "python": "3.12.13",
+  "environment": "conda: $CONDA_PREFIX (path redacted)",
+  "package_source_version": "0.2.5",
+  "installed_editable_metadata_version": "0.1.0",
+  "cuda_toolkit_system": "12.1",
+  "torch_cuda_build": "13.0",
+  "driver": "580.159.03",
+  "gpus": [
+    {"index": 0, "name": "NVIDIA GeForce RTX 3090", "memory_total_mib": 24576, "observed_used_mib": 8187},
+    {"index": 1, "name": "NVIDIA GeForce RTX 3090", "memory_total_mib": 24576, "observed_used_mib": 19260}
+  ],
+  "packages": {
+    "torch": "2.11.0+cu130",
+    "transformers": "5.13.1",
+    "accelerate": "1.14.0",
+    "datasets": "5.0.0",
+    "diffusers": null,
+    "lightning": null,
+    "qdrant-client": "1.18.0",
+    "fastembed": "0.8.0",
+    "fastapi": "0.139.0",
+    "mcp": "1.28.1",
+    "docling": "2.112.0",
+    "PyMuPDF": "1.28.0",
+    "numpy": "2.5.1",
+    "pyarrow": "25.0.0"
+  },
+  "embedding": {"model": "Qwen/Qwen3-Embedding-4B", "revision": "5cf2132abc99cad020ac570b19d031efec650f2b", "dimension": 1024},
+  "vector_store": {"name": "Qdrant", "version": "1.18.2"},
+  "disk": {"root_available_gib": 357, "data_available_tib": 1.2},
+  "services": {
+    "qdrant": "healthy",
+    "embedding_gpu0": "healthy",
+    "embedding_gpu1": "healthy",
+    "reranker_quality_gpu1": "healthy",
+    "search_api": "healthy_but_stale_0.1.0",
+    "mcp_http": "healthy"
+  },
+  "credentials": {"github_token_present": false, "model_api_token_present": false, "zotero_values_recorded": false},
+  "git": "2.34.1",
+  "git_lfs": "3.0.2"
+}

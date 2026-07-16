@@ -1,0 +1,43 @@
+{
+  "captured_at": "2026-07-17T02:15:00+08:00",
+  "schema_version": "2.0",
+  "embedding": {"model": "Qwen/Qwen3-Embedding-4B", "revision": "5cf2132abc99cad020ac570b19d031efec650f2b", "dimension": 1024},
+  "literature": {
+    "source_documents": 3574,
+    "attachments_ready": 3497,
+    "attachments_missing": 77,
+    "chunk_points": 190131,
+    "collection": "zotero_papers_qwen3_4b_1024_v2",
+    "status": "green",
+    "disk": "3.0G local RAG + 1.5G Qdrant"
+  },
+  "code": {
+    "source_markers": 7,
+    "libraries": 5,
+    "normalized_documents": 124,
+    "state_documents": 124,
+    "chunk_artifacts": 124,
+    "chunks": 1118,
+    "vectors": 1118,
+    "collection": "knowledgehub_code_qwen3_4b_1024_v1",
+    "alias": "knowledgehub_code_current",
+    "status": "green",
+    "symbols": 202897,
+    "relations": 1045496,
+    "disk": "1.1G sources + 2.6M RAG + 21M Qdrant"
+  },
+  "writing": {
+    "derived_entries": 134,
+    "state_documents": 134,
+    "chunk_artifacts": 134,
+    "chunks": 134,
+    "vectors": 134,
+    "collection": "knowledgehub_writing_qwen3_4b_1024_v1",
+    "processor_version": "rules-v1",
+    "status": "green"
+  },
+  "validation_candidate": {
+    "code": {"documents": 10, "chunks": 109, "collection": "knowledgehub_code_validation_20260717"},
+    "writing": {"papers": 3, "entries": 87, "collection": "knowledgehub_writing_validation_20260717"}
+  }
+}

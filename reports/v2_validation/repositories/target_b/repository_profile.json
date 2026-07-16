@@ -1,0 +1,12 @@
+{
+  "target": "state-spaces/s4",
+  "upstream_commit": "e757cef57d89e448c413de7325ed5601aceaac13",
+  "case_type": "runtime configuration compatibility",
+  "environment": "workstation-3090",
+  "affected_file": "configs/trainer/debug.yaml",
+  "old_keys": ["gpus", "weights_summary", "progress_bar_refresh_rate", "terminate_on_nan"],
+  "new_keys": ["accelerator", "devices", "enable_model_summary"],
+  "evidence_id": "35507d2458cc4644d73a",
+  "confidence": 0.98,
+  "audit": {"evidence_packages": 1, "changes": 1, "verifications": 2, "valid": true}
+}

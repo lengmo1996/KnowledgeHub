@@ -425,6 +425,7 @@ def run_hub_command(args: argparse.Namespace) -> int:
                         limit=args.limit,
                         dry_run=False,
                         prune=args.prune,
+                        normalized_namespace=args.candidate_collection,
                     )
 
                 if args.dry_run:
@@ -434,6 +435,7 @@ def run_hub_command(args: argparse.Namespace) -> int:
                         limit=args.limit,
                         dry_run=True,
                         prune=args.prune,
+                        normalized_namespace=args.candidate_collection,
                     )
                 else:
                     build_result = _task_executor().execute(

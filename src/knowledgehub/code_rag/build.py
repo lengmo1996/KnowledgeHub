@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,7 @@ class CodeBuildService:
         limit: int | None = None,
         dry_run: bool = False,
         prune: bool = False,
+        normalized_namespace: str | None = None,
     ) -> dict[str, Any]:
         if prune and (version is not None or limit is not None):
             raise ValueError("prune requires a complete all-version Code build")
@@ -94,9 +96,13 @@ class CodeBuildService:
             normalized.extend(
                 item.document.to_dict(include_content=False) for item in selected_releases
             )
-        normalized_path = (
-            self.data_root / "normalized" / library.name / f"{version or 'all-versions'}.jsonl"
-        )
+        normalized_root = self.data_root / "normalized"
+        if normalized_namespace:
+            namespace = re.sub(r"[^A-Za-z0-9_.-]+", "_", normalized_namespace).strip("._")
+            if not namespace:
+                raise ValueError("normalized namespace is empty after sanitization")
+            normalized_root = self.data_root / ".staging" / "normalized" / namespace
+        normalized_path = normalized_root / library.name / f"{version or 'all-versions'}.jsonl"
         if not dry_run:
             atomic_write_jsonl(normalized_path, normalized, sort_key=lambda item: item["document_id"])
         indexer = self.indexer or IncrementalChunkIndexer(self.rag_config, initialize=not dry_run)

@@ -4,7 +4,7 @@ x-app: &app
   build:
     context: ../..
     dockerfile: deploy/services/Dockerfile
-  image: knowledgehub-rag-app:0.1.0
+  image: knowledgehub-rag-app:0.2.5
   # GPU workloads are operator-controlled by default. CPU-only services may
   # override this policy below.
   restart: "no"

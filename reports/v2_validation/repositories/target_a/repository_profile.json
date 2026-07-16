@@ -1,0 +1,13 @@
+{
+  "target": "cloneofsimo/lora",
+  "upstream_commit": "d84074b3e3496f1cfa8a3f49b8b9972ef463b483",
+  "case_type": "API compatibility",
+  "environment": "workstation-3090",
+  "dependency_evidence": ["requirements.txt", "setup.py"],
+  "affected_file": "lora_diffusion/cli_lora_pti.py",
+  "old_api": "torch.cuda.amp.autocast()",
+  "new_api": "torch.autocast(device_type='cuda')",
+  "evidence_id": "0348e53b0c5e472e8465",
+  "confidence": 0.9,
+  "audit": {"evidence_packages": 1, "changes": 1, "verifications": 2, "valid": true}
+}

@@ -389,10 +389,11 @@ class TaskExecutor:
                 **result,
                 "task": self._task_summary(current, acquired, reused=bool(task["reused"])),
             }
-        except Exception as error:
+        except BaseException as error:
             failure_task = self.store.get(task_id)
             if failure_task and failure_task["status"] == "running":
-                self.store.finish(task_id, "failed", error=str(error)[:2000])
+                detail = f"{type(error).__name__}: {error}".rstrip()
+                self.store.finish(task_id, "failed", error=detail[:2000])
             raise
         finally:
             heartbeat_stop.set()

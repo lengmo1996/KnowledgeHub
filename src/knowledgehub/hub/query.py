@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -199,14 +200,18 @@ class HubQueryService:
                 reranker.close()
         hits = list(response.hits)
         if value.knowledge_base == "code":
+            exact_symbol = self._exact_symbol_hit(filters)
+            if exact_symbol is not None:
+                hits.insert(0, exact_symbol)
             priorities = _SOURCE_PRIORITIES[str(intent)]
             rank = {name: index for index, name in enumerate(priorities)}
             hits = [self._code_evidence(hit, filters, str(intent)) for hit in hits]
             evidence_rank = {
-                "target_version_evidence": 0,
-                "current_version_evidence": 1,
-                "change_evidence": 2,
-                "retrieved_evidence": 3,
+                "exact_symbol_source": 0,
+                "target_version_evidence": 1,
+                "current_version_evidence": 2,
+                "change_evidence": 3,
+                "retrieved_evidence": 4,
             }
             hits.sort(
                 key=lambda hit: (
@@ -229,6 +234,69 @@ class HubQueryService:
             elif value.return_mode == "paragraph_structure":
                 hits = [self._paragraph_structure(hit) for hit in hits]
         return dataclasses.replace(response, hits=tuple(hits[: value.top_k]))
+
+    def _exact_symbol_hit(self, filters: Mapping[str, Any]) -> SearchHit | None:
+        library = str(filters.get("library") or "")
+        version = str(
+            filters.get("version")
+            or filters.get("target_version")
+            or filters.get("installed_version")
+            or ""
+        )
+        symbol = str(filters.get("symbol") or "")
+        if not library or not version or not symbol:
+            return None
+        from knowledgehub.code_rag.symbols import SymbolIndex
+
+        data_root = self.config.code.data_root
+        catalog_path = data_root / "state" / "symbols.sqlite3"
+        if not catalog_path.is_file():
+            return None
+        exact = SymbolIndex(catalog_path, read_only=True).inspect(library, version, symbol)
+        if exact is None:
+            return None
+        marker_path = (
+            data_root
+            / "sources"
+            / "repositories"
+            / library
+            / version
+            / "current.json"
+        )
+        marker = json.loads(marker_path.read_text(encoding="utf-8")) if marker_path.is_file() else {}
+        repository = str(marker.get("repository") or "")
+        commit = str(marker.get("commit") or "")
+        path = str(exact.get("path") or "")
+        source_url = (
+            f"https://github.com/{repository}/blob/{commit}/{path}#L{exact.get('start_line')}"
+            if repository and commit and path and exact.get("start_line")
+            else ""
+        )
+        qualified = str(exact.get("qualified_name") or symbol)
+        signature = str(exact.get("signature") or qualified)
+        payload = dict(exact) | {
+            "chunk_id": f"symbol:{exact['symbol_id']}",
+            "document_id": str(exact["symbol_id"]),
+            "knowledge_base": "code",
+            "library": library,
+            "version": version,
+            "symbol": symbol,
+            "qualified_symbol": qualified,
+            "source_type": "source_code",
+            "source_url": source_url,
+            "repository": repository,
+            "commit": commit,
+            "title": f"{library} {version}: {qualified}",
+            "text": f"Signature: {signature}\n\nDefined at {path}:{exact.get('start_line')}",
+            "section": qualified,
+            "evidence_role": "exact_symbol_source",
+            "inference": False,
+        }
+        return SearchHit(
+            point_id=f"symbol:{exact['symbol_id']}",
+            score=1.0,
+            payload=payload,
+        )
 
     @staticmethod
     def _writing_metadata(hit: SearchHit) -> SearchHit:
@@ -311,7 +379,9 @@ class HubQueryService:
     def _code_evidence(hit: SearchHit, filters: Mapping[str, Any], intent: str) -> SearchHit:
         payload = dict(hit.payload)
         version = str(payload.get("version") or "")
-        if version and version == str(filters.get("target_version") or ""):
+        if payload.get("evidence_role") == "exact_symbol_source":
+            role = "exact_symbol_source"
+        elif version and version == str(filters.get("target_version") or ""):
             role = "target_version_evidence"
         elif version and version == str(filters.get("installed_version") or ""):
             role = "current_version_evidence"
