@@ -1,0 +1,29 @@
+schema_version: 1
+groups:
+  writing/function_classification:
+    writing_function_accuracy: {min: 0.9, max_drop: 0.0}
+  writing/section_classification:
+    section_accuracy: {min: 0.9, max_drop: 0.0}
+  writing/paragraph_structure:
+    paragraph_move_exact_match: {min: 0.9, max_drop: 0.0}
+  writing/similarity_risk:
+    similarity_risk_detection_rate: {min: 0.9, max_drop: 0.0}
+  writing/venue_style:
+    profile_source_separation_accuracy: {min: 1.0, max_drop: 0.0}
+  code/api_usage:
+    recall_at_k: {min: 0.5, max_drop: 0.0}
+    correct_symbol_recall: {min: 0.5, max_drop: 0.0}
+  code/compatibility:
+    recall_at_k: {min: 0.5, max_drop: 0.0}
+  code/debugging:
+    recall_at_k: {min: 0.5, max_drop: 0.0}
+  code/source_navigation:
+    recall_at_k: {min: 0.5, max_drop: 0.0}
+  code/repository_adaptation:
+    recall_at_k: {min: 0.5, max_drop: 0.0}
+    correct_symbol_recall: {min: 0.5, max_drop: 0.0}
+  writing/pattern_retrieval:
+    function_recall_at_k: {min: 0.5, max_drop: 0.0}
+    source_traceability_rate: {min: 0.8, max_drop: 0.0}
+    duplicate_material_ratio: {max: 0.5}
+    wrong_domain_recall_rate: {max: 0.5}

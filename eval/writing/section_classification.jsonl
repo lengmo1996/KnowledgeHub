@@ -1,0 +1,5 @@
+{"heading":"1 Introduction","expected_section":"Introduction","difficulty":"easy","notes":"Numeric prefix normalization."}
+{"heading":"4.3 Quantitative Results","expected_section":"Experiment","difficulty":"easy","notes":"Result subsection maps to the Experiment family."}
+{"heading":"Related Work and Background","expected_section":"Related Work","difficulty":"medium","notes":"Related-work precedence over generic background."}
+{"heading":"3 Proposed Methodology","expected_section":"Method","difficulty":"easy","notes":"Method family normalization."}
+{"heading":"7 Discussion and Conclusion","expected_section":"Conclusion","difficulty":"easy","notes":"Discussion and conclusion share the terminal family."}

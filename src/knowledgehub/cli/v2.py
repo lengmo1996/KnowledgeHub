@@ -10,6 +10,13 @@ from typing import Any
 from knowledgehub.code_rag.adapters import adapter_for
 from knowledgehub.code_rag.symbols import SymbolIndex
 from knowledgehub.code_rag.version_diff import compare_symbols
+from knowledgehub.evaluation.runner import (
+    EvaluationRunner,
+    compare_reports,
+    live_query_callback,
+    load_thresholds,
+    write_report,
+)
 from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexSnapshotManager
 from knowledgehub.governance.tasks import TaskStore
 from knowledgehub.governance.validation import HubValidator
@@ -26,6 +33,27 @@ from knowledgehub.writing_rag.v2 import (
 
 
 def add_v2_parsers(subparsers: Any) -> None:
+    evaluation = subparsers.add_parser(
+        "evaluate", help="Run grouped evaluation or compare regression reports"
+    )
+    evaluation_commands = evaluation.add_subparsers(
+        dest="evaluation_command", required=True
+    )
+    evaluation_run = evaluation_commands.add_parser("run")
+    evaluation_run.add_argument("--domain", choices=("all", "code", "writing"), default="all")
+    evaluation_run.add_argument("--mode", choices=("offline", "live"), default="offline")
+    evaluation_run.add_argument("--profile", choices=("v1", "v2"), default="v2")
+    evaluation_run.add_argument("--top-k", type=int, default=10)
+    evaluation_run.add_argument("--eval-root", type=Path, default=Path("eval"))
+    evaluation_run.add_argument("--output", type=Path)
+    evaluation_compare = evaluation_commands.add_parser("compare")
+    evaluation_compare.add_argument("baseline", type=Path)
+    evaluation_compare.add_argument("candidate", type=Path)
+    evaluation_compare.add_argument(
+        "--thresholds", type=Path, default=Path("configs/evaluation/v2.yaml")
+    )
+    evaluation_compare.add_argument("--output", type=Path)
+
     index = subparsers.add_parser("index", help="Create, list or recover Qdrant snapshots")
     commands = index.add_subparsers(dest="index_command", required=True)
     snapshot = commands.add_parser("snapshot")
@@ -166,6 +194,32 @@ def add_v2_parsers(subparsers: Any) -> None:
 
 def run_v2_command(args: argparse.Namespace) -> int:
     config = HubConfig.load(args.hub_config or "configs/knowledgehub.yaml")
+    if args.source == "evaluate":
+        if args.evaluation_command == "run":
+            query = live_query_callback(config) if args.mode == "live" else None
+            report = EvaluationRunner(args.eval_root, query=query).run(
+                domain=args.domain,
+                mode=args.mode,
+                profile=args.profile,
+                top_k=args.top_k,
+            )
+            if args.output:
+                write_report(args.output, report)
+                report["report_path"] = str(args.output)
+            _emit(report)
+            return 1 if report["summary"]["failed_groups"] else 0
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        candidate = json.loads(args.candidate.read_text(encoding="utf-8"))
+        comparison = compare_reports(
+            baseline,
+            candidate,
+            load_thresholds(args.thresholds),
+        )
+        if args.output:
+            write_report(args.output, comparison)
+            comparison["report_path"] = str(args.output)
+        _emit(comparison)
+        return 0 if comparison["passed"] else 1
     if args.source == "index":
         from qdrant_client import QdrantClient
 

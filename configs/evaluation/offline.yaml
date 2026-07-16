@@ -1,0 +1,12 @@
+schema_version: 1
+groups:
+  writing/function_classification:
+    writing_function_accuracy: {min: 0.9, max_drop: 0.0}
+  writing/section_classification:
+    section_accuracy: {min: 0.9, max_drop: 0.0}
+  writing/paragraph_structure:
+    paragraph_move_exact_match: {min: 0.9, max_drop: 0.0}
+  writing/similarity_risk:
+    similarity_risk_detection_rate: {min: 0.9, max_drop: 0.0}
+  writing/venue_style:
+    profile_source_separation_accuracy: {min: 1.0, max_drop: 0.0}

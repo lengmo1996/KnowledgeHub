@@ -188,3 +188,65 @@ def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
     assert response.hits[0].payload["writing_id"] == "w2"
     assert response.hits[0].payload["feedback_adjustment"] == 0.1
     assert response.hits[0].payload["adjusted_quality_score"] == 0.7
+
+
+def test_writing_section_filter_normalizes_legacy_headings(tmp_path: Path) -> None:
+    observed = SimpleNamespace(limit=None)
+
+    class Service:
+        endpoint_pool = SimpleNamespace(close=lambda: None)
+        reranker = None
+
+        def search(self, request):  # type: ignore[no-untyped-def]
+            observed.limit = request.limit
+            return SearchResponse(
+                query=request.query,
+                mode="hybrid",
+                collection="writing",
+                embedding_model="m",
+                embedding_revision="r",
+                embedding_dimension=2,
+                reranker_profile="off",
+                reranker_model=None,
+                reranker_revision=None,
+                reranker_fallback=None,
+                hits=(
+                    SearchHit(
+                        point_id="intro",
+                        score=0.9,
+                        payload={
+                            "document_id": "w1",
+                            "section": "1 Introduction",
+                            "source_title": "Visual object detection with image features",
+                        },
+                    ),
+                    SearchHit(
+                        point_id="end",
+                        score=0.8,
+                        payload={"document_id": "w2", "section": "5 Conclusion"},
+                    ),
+                ),
+                timings={},
+            )
+
+    config = SimpleNamespace(
+        rag_config=lambda _kb: RagConfig(
+            data_dir=tmp_path,
+            gpu_mode="cpu",
+            embedding_dim=2,
+        ),
+        writing=SimpleNamespace(data_root=tmp_path),
+    )
+    response = HubQueryService(config, service_factory=lambda _: Service()).search(
+        HubQueryRequest(
+            knowledge_base="writing",
+            query="gap",
+            filters={"section": "Introduction", "research_domain": "computer_vision"},
+            top_k=1,
+            prefetch_limit=3,
+        )
+    )
+    assert observed.limit == 3
+    assert [hit.point_id for hit in response.hits] == ["intro"]
+    assert response.hits[0].payload["inferred_research_domain"] == ["computer_vision"]
+    assert response.hits[0].payload["research_domain_inference"] is True

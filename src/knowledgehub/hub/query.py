@@ -28,6 +28,42 @@ _SOURCE_PRIORITIES: Mapping[str, tuple[str, ...]] = {
 }
 
 
+def _section_family(value: str) -> str:
+    lowered = value.lower()
+    if "intro" in lowered:
+        return "introduction"
+    if "related" in lowered or "background" in lowered:
+        return "related_work"
+    if "method" in lowered or "approach" in lowered:
+        return "method"
+    if any(item in lowered for item in ("experiment", "result", "analysis")):
+        return "experiment"
+    if "conclu" in lowered or "discussion" in lowered:
+        return "conclusion"
+    return re.sub(r"^\s*[\d.]+\s*", "", lowered).strip()
+
+
+def _normalized_domain(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def _infer_writing_domains(payload: Mapping[str, Any]) -> set[str]:
+    text = " ".join(
+        str(payload.get(key) or "")
+        for key in ("source_title", "title", "text", "source_excerpt")
+    ).lower()
+    inferred: set[str] = set()
+    if re.search(r"\b(?:image|visual|vision|object detection|diffusion model)\b", text):
+        inferred.add("computer_vision")
+    if re.search(r"\b(?:graph|gnn|node|edge)\b", text):
+        inferred.add("graph_learning")
+    if re.search(r"\b(?:language model|llm|lmm|multimodal)\b", text):
+        inferred.add("language_or_multimodal_models")
+    if re.search(r"\b(?:ordinary differential|neural ode|time-series)\b", text):
+        inferred.add("differential_equations")
+    return inferred
+
+
 def classify_code_intent(query: str, explicit: str | None = None) -> str:
     if explicit:
         if explicit not in _SOURCE_PRIORITIES:
@@ -110,6 +146,11 @@ class HubQueryService:
         else:
             service = self.service_factory(rag_config)
         filters = dict(value.filters)
+        writing_post_filters: dict[str, Any] = {}
+        if value.knowledge_base == "writing":
+            for key in ("section", "venue", "research_domain"):
+                if filters.get(key) is not None:
+                    writing_post_filters[key] = filters.pop(key)
         intent = (
             classify_code_intent(value.query, value.intent)
             if value.knowledge_base == "code"
@@ -123,7 +164,11 @@ class HubQueryService:
         request = SearchRequest(
             query=value.query,
             mode=value.mode,
-            limit=value.top_k,
+            limit=(
+                max(value.prefetch_limit, value.top_k)
+                if writing_post_filters
+                else value.top_k
+            ),
             prefetch_limit=max(value.prefetch_limit, value.top_k),
             source=source,
             use_reranker=value.reranker != "off",
@@ -158,12 +203,60 @@ class HubQueryService:
                 )
             )
         elif value.knowledge_base == "writing":
+            hits = [self._writing_metadata(hit) for hit in hits]
+            if writing_post_filters:
+                hits = [
+                    hit
+                    for hit in hits
+                    if self._writing_filter_match(hit.payload, writing_post_filters)
+                ]
             hits = self._apply_writing_feedback(hits)
             if value.return_mode == "pattern_first":
                 hits = [self._pattern_first(hit) for hit in hits]
             elif value.return_mode == "paragraph_structure":
                 hits = [self._paragraph_structure(hit) for hit in hits]
         return dataclasses.replace(response, hits=tuple(hits[: value.top_k]))
+
+    @staticmethod
+    def _writing_metadata(hit: SearchHit) -> SearchHit:
+        payload = dict(hit.payload)
+        inferred = _infer_writing_domains(payload)
+        if inferred:
+            payload["inferred_research_domain"] = sorted(inferred)
+            payload["research_domain_inference"] = True
+        return dataclasses.replace(hit, payload=payload)
+
+    @staticmethod
+    def _writing_filter_match(
+        payload: Mapping[str, Any], filters: Mapping[str, Any]
+    ) -> bool:
+        section = filters.get("section")
+        if section is not None:
+            expected = _section_family(str(section))
+            actual = _section_family(str(payload.get("section") or ""))
+            if expected != actual:
+                return False
+        venue = filters.get("venue")
+        if venue is not None:
+            actual_venue = str(payload.get("venue") or "").lower()
+            domains = {str(value).lower() for value in payload.get("research_domain") or []}
+            expected_venue = str(venue).lower()
+            aliases = {expected_venue}
+            if expected_venue == "neurips":
+                aliases.add("nips")
+            if actual_venue not in aliases and not aliases.intersection(domains):
+                return False
+        domain = filters.get("research_domain")
+        if domain is not None:
+            expected_domain = _normalized_domain(str(domain))
+            declared = {
+                _normalized_domain(str(value))
+                for value in payload.get("research_domain") or []
+            }
+            inferred = _infer_writing_domains(payload)
+            if expected_domain not in declared | inferred:
+                return False
+        return True
 
     def _apply_writing_feedback(self, hits: list[SearchHit]) -> list[SearchHit]:
         writing = getattr(self.config, "writing", None)

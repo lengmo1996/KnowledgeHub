@@ -61,6 +61,8 @@ _PAYLOAD_FIELDS = {
     "intent",
     "writing_function",
     "research_domain",
+    "inferred_research_domain",
+    "research_domain_inference",
     "abstract_pattern",
     "rhetorical_structure",
     "usage_notes",

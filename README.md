@@ -87,6 +87,8 @@ knowledgehub writing-v2 profile venue NeurIPS-selected --paper-id <paper-id> \
 knowledgehub writing-v2 profile personal my-drafts --draft manuscript.md
 knowledgehub writing-v2 task strengthen_argument "make evidence explicit" \
   --text "The method is better." --section Experiment
+knowledgehub evaluate run --mode offline --profile v2 --output /tmp/eval-v2.json
+knowledgehub evaluate run --mode live --profile v2 --output /tmp/eval-live-v2.json
 knowledgehub sync releases --all --dry-run
 knowledgehub sync version --library diffusers --version 0.37.0 --dry-run
 ```

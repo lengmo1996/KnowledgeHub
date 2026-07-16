@@ -24,6 +24,47 @@ Regression gates run whenever schemas, chunks, embedding, reranking, routing,
 symbols or Writing scoring change. V1 remains the baseline; a V2 release must
 not reduce Literature compatibility or silently lower a task group.
 
+## Executable reports
+
+Evaluation reports use schema `evaluation_report@2.0`, include Git/dirty state,
+fixture hashes, mode, profile, per-group metrics, failures and warnings. They do
+not contain an overall quality score.
+
+```bash
+# Network/model-free classifier, rhetoric, similarity and fixture validation.
+knowledgehub evaluate run --mode offline --profile v2 \
+  --output /data/KnowledgeHub/reports/evaluation/offline-v2.json
+
+# Same frozen indexes, two query semantics.
+knowledgehub evaluate run --mode live --profile v1 \
+  --output /data/KnowledgeHub/reports/evaluation/live-v1.json
+knowledgehub evaluate run --mode live --profile v2 \
+  --output /data/KnowledgeHub/reports/evaluation/live-v2.json
+
+knowledgehub evaluate compare \
+  /data/KnowledgeHub/reports/evaluation/live-v1.json \
+  /data/KnowledgeHub/reports/evaluation/live-v2.json \
+  --thresholds configs/evaluation/v2.yaml \
+  --output /data/KnowledgeHub/reports/evaluation/live-comparison.json
+```
+
+`profile=v1` means direct dense/sparse retrieval against the frozen collections.
+`profile=v2` uses the unified router plus exact Symbol Catalog evidence and
+legacy Writing metadata compatibility. This is a controlled query-path
+comparison using one current evaluation harness; it is not execution of an old
+Git checkout. Offline profiles intentionally share deterministic scorers.
+
+The CLI exits non-zero when a fixture group fails or a configured gate fails.
+`configs/evaluation/offline.yaml` gates deterministic groups;
+`configs/evaluation/v2.yaml` gates live retrieval. A missing candidate metric
+fails closed. Metrics requiring human labels are omitted when no label exists,
+not reported as zero.
+
+Legacy Writing domain fallback is a system inference derived from bounded
+source title/excerpt terms. Results expose `inferred_research_domain` and
+`research_domain_inference=true`; the value is never written back as source
+metadata or represented as an author-provided classification.
+
 The repository-adaptation group now includes two public, fixed-commit cases:
 
 - cloneofsimo/lora: PyTorch 2.11 AMP namespace migration;

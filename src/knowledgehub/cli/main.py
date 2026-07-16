@@ -43,7 +43,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_mcp_command(args)
     if args.source in {"source", "environment", "sync", "build", "derive", "query"}:
         return run_hub_command(args)
-    if args.source in {"index", "task", "validate", "symbol", "repository", "writing-v2"}:
+    if args.source in {
+        "index",
+        "task",
+        "validate",
+        "symbol",
+        "repository",
+        "writing-v2",
+        "evaluate",
+    }:
         return run_v2_command(args)
     parser.error(f"Unsupported source: {args.source}")
 
