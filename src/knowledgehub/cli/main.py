@@ -53,6 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "evaluate",
         "clean",
         "prune",
+        "release",
     }:
         return run_v2_command(args)
     parser.error(f"Unsupported source: {args.source}")

@@ -19,3 +19,11 @@ plagiarism detection. Evaluation metrics remain separate from generation.
 
 Runtime governance lives under `/data/KnowledgeHub/{state,indexes}`. V1 data is
 read as V1 until explicitly migrated to a different destination.
+
+The V2 release boundary is represented by
+`state/releases/v2_manifest.json`. Its offline validator checks strict release
+metadata and repository config hashes without contacting runtime services.
+Qdrant health, aliases and point counts are separate read-only observations so
+a temporarily unavailable service cannot be mistaken for config drift. The
+manifest records the completed pre-freeze implementation commit; the commit
+that contains the manifest is the release commit, which avoids self-reference.

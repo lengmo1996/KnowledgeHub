@@ -32,3 +32,15 @@ their own evidence normalization.
 fields remain at the response top level so Skills do not need to unwrap `data`.
 `SchemaRegistry` validates this explicit form and normalizes it to an internal
 `SchemaEnvelope`; other V2 schemas still require the standard `data` object.
+
+Package `0.2.0` is the frozen V2 boundary. Validate a checkout before operating
+on runtime state:
+
+```bash
+knowledgehub release validate
+knowledgehub validate all
+```
+
+The release check is offline and verifies committed config digests. It does not
+promote, rebuild, roll back or clean a collection. See `docs/v2_release.md` for
+the frozen point counts and optional read-only runtime checks.

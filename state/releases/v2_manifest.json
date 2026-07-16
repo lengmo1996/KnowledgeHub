@@ -1,0 +1,153 @@
+{
+  "schema_name": "knowledgehub_release_manifest",
+  "schema_version": "2.0",
+  "release": "v2.0.0",
+  "package_version": "0.2.0",
+  "frozen_at": "2026-07-16T22:48:48+08:00",
+  "implementation_commit": "2407f34c1789eadc40b71ab2155c5de721c5639f",
+  "release_commit_policy": "The release commit is the Git commit containing this manifest; implementation_commit identifies the completed pre-freeze implementation without creating a self-referential hash.",
+  "config_hashes": {
+    "configs/knowledgehub.yaml": "31c3a7e1adb8d7f3b236f8d742b1838e1a9dbe76b4310a95dc71b8334e30c09c",
+    "configs/sources/code.yaml": "6ba57063ecab0ebe382d4dade2b8f70471796a55292f5aa2a48bdbd6a7b888f2",
+    "configs/rag/default.yaml": "6a57d115b1f5a7f1be6c924b733ef2cb562a4b46d0e78bc0614c244d804f9dba",
+    "configs/evaluation/offline.yaml": "e3b1a683d07176dde0e78d2f5df1abab8c61b39d036772011c5ddd139de88a05",
+    "configs/evaluation/v2.yaml": "a8949833e25a996717bd274bb24f92282e34485e152470ec4200b7fa112083b9"
+  },
+  "embedding": {
+    "model": "Qwen/Qwen3-Embedding-4B",
+    "revision": "5cf2132abc99cad020ac570b19d031efec650f2b",
+    "dimension": 1024,
+    "changed_from_v1": false
+  },
+  "indexes": {
+    "literature": {
+      "collection": "zotero_papers_qwen3_4b_1024_v2",
+      "points": 190131,
+      "evidence": "Frozen V1 manifest; V2 performed no Literature rebuild, migration or collection write."
+    },
+    "code": {
+      "collection": "knowledgehub_code_qwen3_4b_1024_v1",
+      "stable_alias": "knowledgehub_code_current",
+      "points": 1106,
+      "artifact_chunks": 1106,
+      "evidence": "/data/KnowledgeHub/indexes/code/current.json and matching Qdrant snapshot checksum e8d97071ca12f237bbe7b47f1c4be53b58e62f88a1d67b87a734c153e3f847b3"
+    },
+    "writing": {
+      "collection": "knowledgehub_writing_qwen3_4b_1024_v1",
+      "points": 134,
+      "artifact_chunks": 134,
+      "processor_version": "rules-v1",
+      "evidence": "Frozen V1 index count plus unchanged 134-entry derived and chunk manifests; rules-v2 remained an unpublished candidate."
+    }
+  },
+  "runtime_recheck": {
+    "attempted_at": "2026-07-16T22:53:34+08:00",
+    "qdrant": "verified_read_only",
+    "qdrant_url": "http://127.0.0.1:6333",
+    "collections_green": 3,
+    "effect": "All release collections and the Code stable alias were read only; no collection was mutated."
+  },
+  "runtime_integrity": {
+    "valid": true,
+    "checked_at": "2026-07-16T22:40:00+08:00",
+    "checks": {
+      "sources": 7,
+      "normalized": 120,
+      "writing": 134
+    },
+    "errors": 0
+  },
+  "source_pins": [
+    {
+      "library": "accelerate",
+      "version": "1.14.0",
+      "commit": "beb0672aa8444ea7647aee056f624effe5996346"
+    },
+    {
+      "library": "diffusers",
+      "version": "0.39.0",
+      "commit": "a3608b512ed7248499a44c61d954965ed9bdae4d"
+    },
+    {
+      "library": "lightning",
+      "version": "2.6.5",
+      "commit": "be98784a1a03581b7051a355ae1084fd352d7cea",
+      "symbols": 6063,
+      "relations": 16503
+    },
+    {
+      "library": "pytorch",
+      "version": "2.11.0",
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "symbols": 60520,
+      "relations": 250298
+    },
+    {
+      "library": "transformers",
+      "version": "5.13.0",
+      "commit": "6af945f436d85f2b0c5dff9b14feccd27b1d470b",
+      "symbols": 68156,
+      "relations": 389342
+    },
+    {
+      "library": "transformers",
+      "version": "5.13.1",
+      "commit": "4626421dc6b741a329300682a6408246ee465490",
+      "symbols": 68158,
+      "relations": 389353
+    },
+    {
+      "library": "transformers",
+      "version": "5.14.0",
+      "commit": "2fa8c195a03938aa148febcc5a696435b4327a47"
+    }
+  ],
+  "interfaces": {
+    "cli_groups": 19,
+    "mcp_tools": 15,
+    "http_additions": [
+      "POST /knowledge/query"
+    ],
+    "evidence_schema": "query_result@2.0",
+    "legacy_defaults_preserved": true
+  },
+  "evaluation": {
+    "fixture_files": 11,
+    "samples": 23,
+    "offline_failed_groups": 0,
+    "live_failed_groups": 0,
+    "regression_gates_passed": true,
+    "report_commit": "dc396d58be7fa65ea386dc7e524169214fb26db1",
+    "reports_root": "/data/KnowledgeHub/reports/evaluation",
+    "final_offline_run_id": "a1a73cb8-2600-42cf-a2f8-44d8d1489e45",
+    "final_live_run_id": "f779b22e-b48e-479d-aba9-b642278beb2b",
+    "final_run_implementation_commit": "2407f34c1789eadc40b71ab2155c5de721c5639f"
+  },
+  "tests": {
+    "passed": 321,
+    "failed": 0,
+    "ruff": "passed",
+    "mypy": "passed",
+    "diff_check": "passed"
+  },
+  "cleanup": {
+    "operation": "clean_source",
+    "plan_id": "96b3bde9ead488131e2b4c53",
+    "bytes_reclaimed": 61520885,
+    "active_sources_touched": false,
+    "literature_touched": false
+  },
+  "knowledge_bases": [
+    "literature",
+    "code",
+    "writing"
+  ],
+  "known_limits": [
+    "The active Writing index contains 134 rules-v1 entries; rules-v2 was validated only as a dry-run candidate and was not promoted.",
+    "No personal Writing profile is frozen because no user draft corpus was supplied.",
+    "The evaluation set is intentionally small and has no completed human-label campaign.",
+    "Generic Code debugging and repository-adaptation recall remain 0.5 and 0.666667 respectively on the live fixture set.",
+    "Language preference is not yet a ranking feature, so an English Code query can retrieve localized official documentation.",
+    "KnowledgeHub does not start a background scheduler or automatically sync all configured libraries."
+  ]
+}

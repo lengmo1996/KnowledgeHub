@@ -18,6 +18,7 @@ from knowledgehub.evaluation.runner import (
     write_report,
 )
 from knowledgehub.governance.maintenance import CleanupService
+from knowledgehub.governance.release import validate_release_manifest
 from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexSnapshotManager
 from knowledgehub.governance.tasks import TaskStore
 from knowledgehub.governance.validation import HubValidator
@@ -34,6 +35,16 @@ from knowledgehub.writing_rag.v2 import (
 
 
 def add_v2_parsers(subparsers: Any) -> None:
+    release = subparsers.add_parser("release", help="Inspect deterministic release metadata")
+    release_commands = release.add_subparsers(dest="release_command", required=True)
+    release_validate = release_commands.add_parser(
+        "validate", help="Validate a release manifest and its repository config hashes"
+    )
+    release_validate.add_argument(
+        "manifest", type=Path, nargs="?", default=Path("state/releases/v2_manifest.json")
+    )
+    release_validate.add_argument("--repository-root", type=Path, default=Path("."))
+
     clean = subparsers.add_parser("clean", help="Plan or execute bounded runtime cleanup")
     clean_commands = clean.add_subparsers(dest="clean_command", required=True)
     clean_cache = clean_commands.add_parser("cache")
@@ -217,6 +228,10 @@ def add_v2_parsers(subparsers: Any) -> None:
 
 
 def run_v2_command(args: argparse.Namespace) -> int:
+    if args.source == "release":
+        result = validate_release_manifest(args.manifest, repository_root=args.repository_root)
+        _emit(result)
+        return 0 if result["valid"] else 1
     config = HubConfig.load(args.hub_config or "configs/knowledgehub.yaml")
     if args.source in {"clean", "prune"}:
         service = CleanupService(

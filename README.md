@@ -51,6 +51,22 @@ protocol without changing stored entries.
 See [Code RAG](docs/code_rag.md), [Writing RAG](docs/writing_rag.md),
 [data sources](docs/data_sources.md), and [Skill integration](docs/skill_integration.md).
 
+## V2 release
+
+V2 is frozen as package `0.2.0`. Validate its machine-readable release
+manifest and committed configuration hashes without contacting runtime
+services:
+
+```bash
+knowledgehub release validate
+```
+
+The final read-only runtime check observed Literature 190,131 points, Code
+1,106 points and Writing 134 points, all green. See the
+[V2 final report](docs/V2_FINAL_REPORT.md) and
+[release operations guide](docs/v2_release.md) for scope, evidence, known
+limits and optional operator checks.
+
 ## V2 governance and code intelligence
 
 V2 keeps V1 collections and embedding settings while adding explicit schema
