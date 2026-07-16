@@ -34,7 +34,37 @@ def test_repository_intake_and_conservative_matrix(tmp_path: Path) -> None:
     assert "E4" not in matrix
     assert "ignored" not in matrix
     assert result["profile"]["api_usage"][0]["library"] == "torch"
+    assert result["profile"]["api_inventory"]["truncated"] is False
     assert Path(result["report"]).is_file()
+
+
+def test_repository_inventory_resolves_aliases_and_structural_usage(tmp_path: Path) -> None:
+    repo = tmp_path / "aliased"
+    repo.mkdir()
+    (repo / "main.py").write_text(
+        """import pytorch_lightning as pl
+from diffusers import DiffusionPipeline as Pipeline
+
+class Model(pl.LightningModule):
+    pass
+
+trainer = pl.Trainer(gpus=1)
+pipe = Pipeline.from_pretrained('demo')
+pl.Trainer.legacy_flag = True
+if pl.__version__ < '2':
+    pass
+""",
+        encoding="utf-8",
+    )
+    result = RepositoryIntake(repo).inspect({"name": "test", "packages": {}})
+    usage = {item["library"]: item for item in result["profile"]["api_usage"]}
+    lightning = usage["pytorch_lightning"]
+    assert "pytorch_lightning.Trainer" in lightning["symbols"]
+    assert lightning["call_sites"][0]["parameters"] == ["gpus"]
+    assert lightning["inherited_symbols"][0]["base"] == "pytorch_lightning.LightningModule"
+    assert lightning["monkey_patches"][0]["target"] == "pytorch_lightning.Trainer.legacy_flag"
+    assert lightning["detected_version_assumptions"]
+    assert "diffusers.DiffusionPipeline.from_pretrained" in usage["diffusers"]["symbols"]
 
 
 def test_writing_structure_similarity_profile_and_feedback(tmp_path: Path) -> None:

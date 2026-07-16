@@ -14,6 +14,8 @@ from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexS
 from knowledgehub.governance.tasks import TaskStore
 from knowledgehub.governance.validation import HubValidator
 from knowledgehub.hub.config import HubConfig
+from knowledgehub.hub.query import HubQueryRequest, HubQueryService
+from knowledgehub.workflows.adaptation import AdaptationWorkflow, parse_debug_log
 from knowledgehub.workflows.repository import RepositoryIntake
 from knowledgehub.writing_rag.v2 import WritingFeedbackStore, similarity_risk
 
@@ -73,6 +75,42 @@ def add_v2_parsers(subparsers: Any) -> None:
     analyze.add_argument("path", type=Path)
     analyze.add_argument("--environment", default="current")
     analyze.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
+    evidence = repository_commands.add_parser("evidence")
+    evidence.add_argument("path", type=Path)
+    evidence.add_argument("--issue", required=True)
+    evidence.add_argument("--environment", default="current")
+    evidence.add_argument("--file", action="append", dest="files", required=True)
+    evidence.add_argument("--query")
+    evidence.add_argument("--library")
+    evidence.add_argument("--version")
+    evidence.add_argument("--symbol")
+    evidence.add_argument("--strategy", required=True)
+    evidence.add_argument("--confidence", type=float, required=True)
+    evidence.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
+    change = repository_commands.add_parser("record-change")
+    change.add_argument("path", type=Path)
+    change.add_argument("--file", action="append", dest="files", required=True)
+    change.add_argument("--reason", required=True)
+    change.add_argument("--old-api")
+    change.add_argument("--new-api")
+    change.add_argument("--evidence-id", action="append", dest="evidence_ids", required=True)
+    change.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
+    verification = repository_commands.add_parser("record-verification")
+    verification.add_argument("path", type=Path)
+    verification.add_argument("--name", required=True)
+    verification.add_argument("--command", required=True)
+    verification.add_argument("--exit-code", type=int, required=True)
+    verification.add_argument("--output-file", type=Path)
+    verification.add_argument("--output", default="")
+    verification.add_argument("--scope", default="bounded")
+    verification.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
+    finalize = repository_commands.add_parser("finalize")
+    finalize.add_argument("path", type=Path)
+    finalize.add_argument("--risk", action="append", dest="risks", default=[])
+    finalize.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
+    debug_log = repository_commands.add_parser("debug-log")
+    debug_log.add_argument("path", type=Path)
+    debug_log.add_argument("--log-file", type=Path, required=True)
 
     writing = subparsers.add_parser("writing-v2", help="Writing similarity and feedback operations")
     writing_commands = writing.add_subparsers(dest="writing_v2_command", required=True)
@@ -132,26 +170,159 @@ def run_v2_command(args: argparse.Namespace) -> int:
         new = catalog.inspect(args.library, args.to_version, args.symbol)
         return _emit(compare_symbols(old, new))
     if args.source == "repository":
-        environment_path = config.code.data_root / "state" / "environments" / f"{args.environment}.json"
-        environment = json.loads(environment_path.read_text(encoding="utf-8"))
-        result = RepositoryIntake(args.path).analyze(environment, args.output_root)
-        profile = result["profile"]
-        return _emit(
-            {
-                "repository": profile["repository"],
-                "version": profile.get("version"),
-                "commit": profile.get("commit"),
-                "dependencies": len(profile["dependencies"]),
-                "api_libraries": len(profile["api_usage"]),
-                "compatibility_statuses": {
-                    status: sum(
-                        item["status"] == status for item in result["compatibility_matrix"]
+        if args.repository_command == "debug-log":
+            return _emit(
+                parse_debug_log(
+                    args.log_file.read_text(encoding="utf-8", errors="replace"),
+                    args.path,
+                )
+            )
+        workflow = AdaptationWorkflow(args.path, args.output_root)
+        if args.repository_command in {"analyze", "evidence"}:
+            environment_path = (
+                config.code.data_root
+                / "state"
+                / "environments"
+                / f"{args.environment}.json"
+            )
+            environment = json.loads(environment_path.read_text(encoding="utf-8"))
+            if args.repository_command == "analyze":
+                result = RepositoryIntake(args.path).analyze(environment, args.output_root)
+                profile = result["profile"]
+                return _emit(
+                    {
+                        "repository": profile["repository"],
+                        "version": profile.get("version"),
+                        "commit": profile.get("commit"),
+                        "dependencies": len(profile["dependencies"]),
+                        "api_libraries": len(profile["api_usage"]),
+                        "compatibility_statuses": {
+                            status: sum(
+                                item["status"] == status
+                                for item in result["compatibility_matrix"]
+                            )
+                            for status in ("likely_compatible", "conflict", "unknown")
+                        },
+                        "report": result["report"],
+                    }
+                )
+            evidence_values: list[dict[str, Any]] = []
+            warnings: list[str] = []
+            if args.symbol and args.library and args.version:
+                catalog = SymbolIndex(
+                    config.code.data_root / "state" / "symbols.sqlite3", read_only=True
+                )
+                symbol = catalog.inspect(args.library, args.version, args.symbol)
+                if symbol is None:
+                    warnings.append("exact_symbol_not_found")
+                else:
+                    marker_path = (
+                        config.code.data_root
+                        / "sources"
+                        / "repositories"
+                        / args.library
+                        / args.version
+                        / "current.json"
                     )
-                    for status in ("likely_compatible", "conflict", "unknown")
-                },
-                "report": result["report"],
-            }
-        )
+                    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                    source_path = Path(marker["source_path"]) / symbol["path"]
+                    source_lines = source_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()
+                    start = max(0, int(symbol["start_line"]) - 1)
+                    end = min(len(source_lines), int(symbol["end_line"]))
+                    repository = str(marker["repository"])
+                    commit = str(marker["commit"])
+                    evidence_values.append(
+                        {
+                            "source_type": "source_code",
+                            "library": args.library,
+                            "version": args.version,
+                            "symbol": symbol["qualified_name"],
+                            "content": f"Signature: {symbol['signature']}\n\n"
+                            + "\n".join(source_lines[start:end]),
+                            "source_url": f"https://github.com/{repository}/blob/{commit}/{symbol['path']}#L{symbol['start_line']}",
+                            "commit": commit,
+                            "evidence_role": "exact_symbol_source",
+                            "inference": False,
+                        }
+                    )
+            if args.query:
+                filters = {
+                    key: value
+                    for key, value in {
+                        "library": args.library,
+                        "version": args.version,
+                        "symbol": args.symbol,
+                    }.items()
+                    if value
+                }
+                response = HubQueryService(config).search(
+                    HubQueryRequest(
+                        knowledge_base="code",
+                        query=args.query,
+                        intent="compatibility",
+                        filters=filters,
+                        top_k=8,
+                    )
+                )
+                warnings.extend(response.warnings)
+                evidence_values.extend(
+                    [
+                    {
+                        "source_type": hit.payload.get("source_type"),
+                        "library": hit.payload.get("library"),
+                        "version": hit.payload.get("version"),
+                        "symbol": hit.payload.get("symbol"),
+                        "content": hit.payload.get("text"),
+                        "source_url": hit.payload.get("source_url"),
+                        "commit": hit.payload.get("commit"),
+                        "evidence_role": hit.payload.get("evidence_role"),
+                        "inference": hit.payload.get("inference", False),
+                    }
+                    for hit in response.hits
+                    ]
+                )
+            else:
+                if not evidence_values:
+                    warnings.append("no_code_rag_query_was_requested")
+            return _emit(
+                workflow.create_evidence(
+                    issue=args.issue,
+                    environment=environment,
+                    affected_files=args.files,
+                    retrieved_evidence=evidence_values,
+                    recommended_strategy=args.strategy,
+                    confidence=args.confidence,
+                    warnings=warnings,
+                )
+            )
+        if args.repository_command == "record-change":
+            return _emit(
+                workflow.record_change(
+                    affected_files=args.files,
+                    reason=args.reason,
+                    old_api=args.old_api,
+                    new_api=args.new_api,
+                    evidence_ids=args.evidence_ids,
+                )
+            )
+        if args.repository_command == "record-verification":
+            output = (
+                args.output_file.read_text(encoding="utf-8", errors="replace")
+                if args.output_file
+                else args.output
+            )
+            return _emit(
+                workflow.record_verification(
+                    name=args.name,
+                    command=args.command,
+                    exit_code=args.exit_code,
+                    output=output,
+                    scope=args.scope,
+                )
+            )
+        return _emit(workflow.finalize(unresolved_risks=args.risks))
     if args.source == "writing-v2":
         if args.writing_v2_command == "feedback":
             return _emit(WritingFeedbackStore(config.writing.data_root / "state" / "feedback.sqlite3").submit(args.writing_id, args.label))

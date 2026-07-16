@@ -70,6 +70,16 @@ knowledgehub symbol build transformers 5.13.1
 knowledgehub symbol compare transformers 5.13.0 5.13.1 PreTrainedModel.from_pretrained
 knowledgehub query code "why did this API fail?" --symbol SomeClass.method --explain-plan
 knowledgehub repository analyze /path/to/repo --environment workstation-3090 --output-root /data/KnowledgeHub/reports
+knowledgehub repository evidence /path/to/repo --issue "Trainer rejects gpus" \
+  --environment workstation-3090 --file configs/trainer/debug.yaml \
+  --library lightning --version 2.6.5 --symbol Trainer.__init__ \
+  --strategy "migrate to accelerator/devices" --confidence 0.95
+# After Codex edits and runs bounded checks, record rather than re-execute them:
+knowledgehub repository record-change /path/to/repo --file configs/trainer/debug.yaml \
+  --reason "match Lightning 2 Trainer" --evidence-id <id>
+knowledgehub repository record-verification /path/to/repo --name syntax \
+  --command "python -m py_compile train.py" --exit-code 0 --output "passed"
+knowledgehub repository finalize /path/to/repo --risk "full training not run"
 knowledgehub writing-v2 similarity "candidate paragraph"
 knowledgehub sync releases --all --dry-run
 knowledgehub sync version --library diffusers --version 0.37.0 --dry-run
@@ -78,7 +88,9 @@ knowledgehub sync version --library diffusers --version 0.37.0 --dry-run
 Snapshot and alias rollback are never implicit and require `--yes`. Candidate
 promotion switches a stable Qdrant alias atomically and retains the prior
 physical collection. Repository analysis
-does not execute code or install dependencies. See [V2 architecture](docs/v2_architecture.md)
+does not execute code or install dependencies. Evidence creation must precede
+edits; verification commands are executed by the operator/Codex and only their
+results are recorded by KnowledgeHub. See [V2 architecture](docs/v2_architecture.md)
 and [V2 migration](docs/v2_migration.md).
 
 The source consumes two independent inputs:
