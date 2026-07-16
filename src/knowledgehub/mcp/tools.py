@@ -509,6 +509,9 @@ class ToolRegistry:
             value.writing_id,
             value.label,
             value.context.model_dump(exclude_none=True),
+            known_ids=WritingFeedbackStore.known_ids(
+                config.writing.data_root / "derived" / "writing_entries.jsonl"
+            ),
         )
         return {"ok": True, "result": result}
 

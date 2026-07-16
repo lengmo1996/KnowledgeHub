@@ -131,6 +131,11 @@ response-only alias of `document_id`, making feedback commands uniform without
 rewriting the frozen Writing collection.
 See the [V2.0.4 completion report](docs/V2_PATCH_4_REPORT.md).
 
+V2.0.5 closes the explicit-feedback loop. New feedback accepts only canonical
+`writing:` identities and, when the derived manifest is present, rejects
+unknown entries. `knowledgehub writing-v2 feedback-status` audits malformed and
+orphan historical events without deleting or rewriting them.
+
 ## V2 governance and code intelligence
 
 V2 keeps V1 collections and embedding settings while adding explicit schema

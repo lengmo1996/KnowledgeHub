@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -93,9 +94,33 @@ def test_writing_structure_similarity_profile_and_feedback(tmp_path: Path) -> No
     )
     assert profile["evidence_source"] == "user_selected_literature"
     feedback = WritingFeedbackStore(tmp_path / "feedback.sqlite3")
-    feedback.submit("w1", "useful")
-    feedback.submit("w1", "too_similar")
-    assert feedback.adjustment("w1") < 0
+    feedback.submit("writing:w1", "useful")
+    feedback.submit("writing:w1", "too_similar")
+    assert feedback.adjustment("writing:w1") < 0
+    with pytest.raises(ValueError, match="beginning with writing:"):
+        feedback.submit("profile:not-a-writing-entry", "useful")
+    audit = feedback.audit({"writing:w1"})
+    assert audit["valid_event_count"] == 2
+    assert audit["invalid_event_count"] == 0
+
+
+def test_writing_feedback_audit_preserves_malformed_history(tmp_path: Path) -> None:
+    path = tmp_path / "feedback.sqlite3"
+    store = WritingFeedbackStore(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO feedback VALUES(?,?,?,?,?)",
+            ("old", "profile:old", "useful", "now", "{}"),
+        )
+        connection.execute(
+            "INSERT INTO feedback VALUES(?,?,?,?,?)",
+            ("orphan", "writing:missing", "useful", "now", "{}"),
+        )
+    audit = store.audit({"writing:known"})
+    assert audit["event_count"] == 2
+    assert audit["malformed_identifier_count"] == 1
+    assert audit["orphan_identifier_count"] == 1
+    assert audit["history_mutated"] is False
 
 
 def test_writing_profiles_keep_venue_and_personal_sources_separate(tmp_path: Path) -> None:

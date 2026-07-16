@@ -97,11 +97,15 @@ and are re-ranked without modifying or deleting source entries.
 ```bash
 knowledgehub writing-v2 similarity "candidate paragraph"
 knowledgehub writing-v2 feedback <writing-id> too_similar
+knowledgehub writing-v2 feedback-status
 ```
 
 Query responses always expose `payload.writing_id`. For the frozen `rules-v1`
 index this is a response-only alias of its canonical `document_id`; no Qdrant
 payload is rewritten. Pass that value unchanged to the feedback command.
+New feedback rejects profile IDs, malformed identities and IDs absent from the
+current derived manifest. `feedback-status` is read-only: it reports valid,
+malformed and orphan event counts while retaining historical rows for audit.
 
 Changing from `rules-v1` to `rules-v2` creates version-distinct Writing IDs.
 There is no automatic full-library derivation; use an explicit paper,

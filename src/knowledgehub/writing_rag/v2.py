@@ -571,10 +571,19 @@ class WritingFeedbackStore:
                 )
 
     def submit(
-        self, writing_id: str, label: str, context: Mapping[str, Any] | None = None
+        self,
+        writing_id: str,
+        label: str,
+        context: Mapping[str, Any] | None = None,
+        *,
+        known_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         if self.read_only:
             raise RuntimeError("feedback store is read-only")
+        if not writing_id.startswith("writing:"):
+            raise ValueError("feedback requires a Writing Entry ID beginning with writing:")
+        if known_ids is not None and writing_id not in known_ids:
+            raise ValueError("feedback Writing Entry ID was not found in the derived manifest")
         if label not in self.ALLOWED:
             raise ValueError("unsupported feedback label")
         value = {
@@ -596,6 +605,54 @@ class WritingFeedbackStore:
                 ),
             )
         return value
+
+    def audit(self, known_ids: set[str] | None = None) -> dict[str, Any]:
+        """Report malformed and orphan feedback without deleting history."""
+        connection_path = f"file:{self.path}?mode=ro" if self.read_only else str(self.path)
+        with sqlite3.connect(connection_path, uri=self.read_only) as connection:
+            rows = connection.execute(
+                "SELECT writing_id,label FROM feedback ORDER BY created_at"
+            ).fetchall()
+        malformed = [row for row in rows if not str(row[0]).startswith("writing:")]
+        orphaned = [
+            row
+            for row in rows
+            if str(row[0]).startswith("writing:")
+            and known_ids is not None
+            and str(row[0]) not in known_ids
+        ]
+        invalid = len(malformed) + len(orphaned)
+        valid_rows = [row for row in rows if row not in malformed and row not in orphaned]
+        return {
+            "schema_name": "writing_feedback_audit",
+            "schema_version": "2.5",
+            "event_count": len(rows),
+            "valid_event_count": len(valid_rows),
+            "malformed_identifier_count": len(malformed),
+            "orphan_identifier_count": len(orphaned),
+            "invalid_event_count": invalid,
+            "labels": dict(Counter(str(row[1]) for row in valid_rows)),
+            "known_manifest_checked": known_ids is not None,
+            "history_mutated": False,
+        }
+
+    @staticmethod
+    def known_ids(path: Path) -> set[str] | None:
+        if not path.is_file():
+            return None
+        identifiers: set[str] = set()
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+                writing_id = str(value["writing_id"])
+            except (KeyError, TypeError, json.JSONDecodeError) as error:
+                raise ValueError(
+                    f"invalid Writing derived manifest record at line {line_number}"
+                ) from error
+            identifiers.add(writing_id)
+        return identifiers
 
     def adjustment(self, writing_id: str) -> float:
         return self.adjustments([writing_id]).get(writing_id, 0.0)

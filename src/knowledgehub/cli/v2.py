@@ -214,6 +214,9 @@ def add_v2_parsers(subparsers: Any) -> None:
     feedback = writing_commands.add_parser("feedback")
     feedback.add_argument("writing_id")
     feedback.add_argument("label")
+    writing_commands.add_parser(
+        "feedback-status", help="Audit feedback identities without changing history"
+    )
     profile = writing_commands.add_parser("profile")
     profile_commands = profile.add_subparsers(dest="profile_command", required=True)
     venue = profile_commands.add_parser("venue")
@@ -608,11 +611,36 @@ def run_v2_command(args: argparse.Namespace) -> int:
             )
         return _emit(workflow.finalize(unresolved_risks=args.risks))
     if args.source == "writing-v2":
+        feedback_path = config.writing.data_root / "state" / "feedback.sqlite3"
+        derived_path = config.writing.data_root / "derived" / "writing_entries.jsonl"
         if args.writing_v2_command == "feedback":
             return _emit(
-                WritingFeedbackStore(
-                    config.writing.data_root / "state" / "feedback.sqlite3"
-                ).submit(args.writing_id, args.label)
+                WritingFeedbackStore(feedback_path).submit(
+                    args.writing_id,
+                    args.label,
+                    known_ids=WritingFeedbackStore.known_ids(derived_path),
+                )
+            )
+        if args.writing_v2_command == "feedback-status":
+            if not feedback_path.is_file():
+                return _emit(
+                    {
+                        "schema_name": "writing_feedback_audit",
+                        "schema_version": "2.5",
+                        "event_count": 0,
+                        "valid_event_count": 0,
+                        "malformed_identifier_count": 0,
+                        "orphan_identifier_count": 0,
+                        "invalid_event_count": 0,
+                        "labels": {},
+                        "known_manifest_checked": derived_path.is_file(),
+                        "history_mutated": False,
+                    }
+                )
+            return _emit(
+                WritingFeedbackStore(feedback_path, read_only=True).audit(
+                    WritingFeedbackStore.known_ids(derived_path)
+                )
             )
         profile_store = WritingProfileStore(config.writing.data_root / "manifests" / "profiles")
         if args.writing_v2_command == "profiles":

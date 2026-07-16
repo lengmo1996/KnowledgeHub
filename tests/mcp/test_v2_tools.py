@@ -89,7 +89,7 @@ def test_symbol_repository_and_feedback_tools(tmp_path: Path, monkeypatch) -> No
         assert analyzed.structuredContent["result"]["profile"]["repository"] == "repository"
         feedback = await tools.call(
             "knowledge_submit_feedback",
-            {"writing_id": "w1", "label": "useful", "context": {"rank": 1}},
+            {"writing_id": "writing:w1", "label": "useful", "context": {"rank": 1}},
         )
         assert feedback.structuredContent["result"]["label"] == "useful"
 

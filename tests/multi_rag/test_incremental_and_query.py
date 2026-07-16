@@ -141,7 +141,9 @@ def test_code_intent_and_query_priority() -> None:
 
 
 def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
-    WritingFeedbackStore(tmp_path / "state" / "feedback.sqlite3").submit("w2", "useful")
+    WritingFeedbackStore(tmp_path / "state" / "feedback.sqlite3").submit(
+        "writing:w2", "useful"
+    )
 
     class Service:
         endpoint_pool = SimpleNamespace(close=lambda: None)
@@ -163,12 +165,12 @@ def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
                     SearchHit(
                         point_id="a",
                         score=0.85,
-                        payload={"document_id": "w1", "quality_score": 0.6},
+                        payload={"document_id": "writing:w1", "quality_score": 0.6},
                     ),
                     SearchHit(
                         point_id="b",
                         score=0.8,
-                        payload={"document_id": "w2", "quality_score": 0.6},
+                        payload={"document_id": "writing:w2", "quality_score": 0.6},
                     ),
                 ),
                 timings={},
@@ -185,7 +187,7 @@ def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
     response = HubQueryService(config, service_factory=lambda _: Service()).search(
         HubQueryRequest(knowledge_base="writing", query="research gap")
     )
-    assert response.hits[0].payload["writing_id"] == "w2"
+    assert response.hits[0].payload["writing_id"] == "writing:w2"
     assert response.hits[0].payload["feedback_adjustment"] == 0.1
     assert response.hits[0].payload["adjusted_quality_score"] == 0.7
 
