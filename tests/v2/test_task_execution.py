@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -147,10 +148,14 @@ def test_stale_running_task_and_lock_are_recovered_as_retry(tmp_path: Path) -> N
         inputs={"version": "1.0"},
         reuse_completed=False,
     )
-    store.acquire("library:demo", str(owner["task_id"]), ttl_seconds=86400)
+    store.acquire("library:demo", str(owner["task_id"]), ttl_seconds=60)
     with store.connect() as connection:
         connection.execute(
             "UPDATE tasks SET started_at='2000-01-01T00:00:00+00:00' WHERE task_id=?",
+            (owner["task_id"],),
+        )
+        connection.execute(
+            "UPDATE locks SET expires_at='2000-01-01T00:00:01+00:00' WHERE task_id=?",
             (owner["task_id"],),
         )
     result = TaskExecutor(store).execute(
@@ -169,6 +174,78 @@ def test_stale_running_task_and_lock_are_recovered_as_retry(tmp_path: Path) -> N
     assert attempts[0]["error_summary"] == "stale_task_recovered"
     with store.connect() as connection:
         assert connection.execute("SELECT count(*) FROM locks").fetchone()[0] == 0
+
+
+def test_live_lease_prevents_old_running_task_from_stale_recovery(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    owner = store.begin(
+        "code_build",
+        knowledge_base="code",
+        inputs={"limit": 1},
+        reuse_completed=False,
+    )
+    store.acquire("index:code:test", str(owner["task_id"]), ttl_seconds=60)
+    with store.connect() as connection:
+        connection.execute(
+            "UPDATE tasks SET started_at='2000-01-01T00:00:00+00:00' WHERE task_id=?",
+            (owner["task_id"],),
+        )
+    repeated = store.begin(
+        "code_build",
+        knowledge_base="code",
+        inputs={"limit": 1},
+        reuse_completed=False,
+        stale_after_seconds=1,
+    )
+    assert repeated["execution_required"] is False
+    assert repeated["status"] == "running"
+    assert len(store.list_attempts(str(owner["task_id"]))) == 1
+
+
+def test_executor_heartbeats_and_fails_closed_when_lease_is_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    renewals = 0
+    original = store.renew
+
+    def counting_renew(*args: Any, **kwargs: Any) -> None:
+        nonlocal renewals
+        renewals += 1
+        original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "renew", counting_renew)
+    result = TaskExecutor(store).execute(
+        "code_build",
+        lambda: (time.sleep(0.08) or {"status": "success"}),
+        knowledge_base="code",
+        inputs={"limit": 1},
+        lock_keys=("index:code:test",),
+        ttl_seconds=1,
+        heartbeat_interval_seconds=0.01,
+    )
+    assert result["task"]["status"] == "completed"
+    assert renewals >= 2
+
+    def lost_lease(*_args: Any, **_kwargs: Any) -> None:
+        raise TaskConflictError("simulated lease loss")
+
+    monkeypatch.setattr(store, "renew", lost_lease)
+    with pytest.raises(TaskConflictError, match="simulated lease loss"):
+        TaskExecutor(store).execute(
+            "writing_derive",
+            lambda: (time.sleep(0.04) or {"status": "success"}),
+            knowledge_base="writing",
+            inputs={"limit": 2},
+            lock_keys=("index:writing:test",),
+            ttl_seconds=1,
+            heartbeat_interval_seconds=0.01,
+        )
+    failed = next(
+        item for item in store.list_tasks() if item["task_type"] == "writing_derive"
+    )
+    assert failed["status"] == "failed"
+    assert "simulated lease loss" in failed["error_summary"]
 
 
 def test_task_store_migrates_v2_database_without_losing_rows(tmp_path: Path) -> None:

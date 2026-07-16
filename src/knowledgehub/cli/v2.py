@@ -20,7 +20,7 @@ from knowledgehub.evaluation.runner import (
 from knowledgehub.governance.maintenance import CleanupService
 from knowledgehub.governance.release import validate_release_manifest
 from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexSnapshotManager
-from knowledgehub.governance.tasks import TaskStore, default_task_store_path
+from knowledgehub.governance.tasks import TaskExecutor, TaskStore, default_task_store_path
 from knowledgehub.governance.validation import HubValidator
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.hub.query import HubQueryRequest, HubQueryService
@@ -128,7 +128,8 @@ def add_v2_parsers(subparsers: Any) -> None:
         "validate", help="Validate cross-domain source and derived integrity"
     )
     validate.add_argument(
-        "target", choices=("sources", "normalized", "writing", "index", "all")
+        "target",
+        choices=("sources", "normalized", "dependencies", "writing", "index", "all"),
     )
     validate.add_argument("knowledge_base", nargs="?", choices=("code", "writing"))
     validate.add_argument(
@@ -199,6 +200,9 @@ def add_v2_parsers(subparsers: Any) -> None:
     finalize.add_argument("path", type=Path)
     finalize.add_argument("--risk", action="append", dest="risks", default=[])
     finalize.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
+    audit = repository_commands.add_parser("validate")
+    audit.add_argument("path", type=Path)
+    audit.add_argument("--output-root", type=Path, default=Path("/data/KnowledgeHub/reports"))
     debug_log = repository_commands.add_parser("debug-log")
     debug_log.add_argument("path", type=Path)
     debug_log.add_argument("--log-file", type=Path, required=True)
@@ -416,8 +420,30 @@ def run_v2_command(args: argparse.Namespace) -> int:
             )
             value = json.loads(marker.read_text(encoding="utf-8"))
             root = Path(value["source_path"])
-            result = catalog.build(
-                args.library, args.version, root, adapter_for(args.library).discover_source(root)
+            def symbol_operation() -> dict[str, Any]:
+                return {
+                    "status": "success",
+                    **catalog.build(
+                        args.library,
+                        args.version,
+                        root,
+                        adapter_for(args.library).discover_source(root),
+                    ),
+                }
+
+            result = TaskExecutor(TaskStore(default_task_store_path())).execute(
+                "symbol_build",
+                symbol_operation,
+                knowledge_base="code",
+                library=args.library,
+                version=args.version,
+                inputs={"source_commit": value.get("commit")},
+                input_manifest=str(marker),
+                lock_keys=(
+                    f"library:{args.library}",
+                    "symbols:catalog",
+                ),
+                output_manifest=lambda _result: str(catalog.path),
             )
             return _emit(result)
         if args.symbol_command == "inspect":
@@ -551,6 +577,10 @@ def run_v2_command(args: argparse.Namespace) -> int:
                     warnings=warnings,
                 )
             )
+        if args.repository_command == "validate":
+            result = workflow.validate()
+            _emit(result)
+            return 0 if result["valid"] else 1
         if args.repository_command == "record-change":
             return _emit(
                 workflow.record_change(

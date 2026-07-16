@@ -29,24 +29,72 @@ def compare_symbols(old: Mapping[str, Any] | None, new: Mapping[str, Any] | None
 
 
 def signature_diff(old: str, new: str) -> dict[str, list[Any]]:
-    def arguments(value: str) -> dict[str, str | None]:
+    def signature(value: str) -> tuple[dict[str, dict[str, str | None]], str | None]:
         try:
             node = ast.parse(f"def {value}:\n pass").body[0]
             assert isinstance(node, ast.FunctionDef)
         except (SyntaxError, AssertionError):
-            return {}
-        args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
-        defaults = [None] * (len(args) - len(node.args.defaults)) + list(node.args.defaults)
-        return {arg.arg: ast.unparse(default) if default else None for arg, default in zip(args, defaults, strict=True)}
-    before, after = arguments(old), arguments(new)
+            return {}, None
+        positional = [*node.args.posonlyargs, *node.args.args]
+        positional_defaults = [None] * (
+            len(positional) - len(node.args.defaults)
+        ) + list(node.args.defaults)
+        values: dict[str, dict[str, str | None]] = {}
+        for argument, default in zip(positional, positional_defaults, strict=True):
+            values[argument.arg] = {
+                "annotation": ast.unparse(argument.annotation)
+                if argument.annotation
+                else None,
+                "default": ast.unparse(default) if default else None,
+            }
+        for argument, default in zip(
+            node.args.kwonlyargs, node.args.kw_defaults, strict=True
+        ):
+            values[argument.arg] = {
+                "annotation": ast.unparse(argument.annotation)
+                if argument.annotation
+                else None,
+                "default": ast.unparse(default) if default else None,
+            }
+        for optional_argument in (node.args.vararg, node.args.kwarg):
+            if optional_argument is not None:
+                values[optional_argument.arg] = {
+                    "annotation": ast.unparse(optional_argument.annotation)
+                    if optional_argument.annotation
+                    else None,
+                    "default": None,
+                }
+        returns = ast.unparse(node.returns) if node.returns else None
+        return values, returns
+
+    before, before_return = signature(old)
+    after, after_return = signature(new)
+    shared = sorted(set(before) & set(after))
     return {
         "added_parameters": sorted(set(after) - set(before)),
         "removed_parameters": sorted(set(before) - set(after)),
         "renamed_parameters": [],
         "default_changes": [
-            {"parameter": name, "from": before[name], "to": after[name]}
-            for name in sorted(set(before) & set(after)) if before[name] != after[name]
+            {
+                "parameter": name,
+                "from": before[name]["default"],
+                "to": after[name]["default"],
+            }
+            for name in shared
+            if before[name]["default"] != after[name]["default"]
         ],
-        "type_changes": [],
-        "return_changes": [],
+        "type_changes": [
+            {
+                "parameter": name,
+                "from": before[name]["annotation"],
+                "to": after[name]["annotation"],
+            }
+            for name in shared
+            if before[name]["annotation"] != after[name]["annotation"]
+        ],
+        "return_changes": (
+            [{"from": before_return, "to": after_return}]
+            if before_return != after_return
+            else []
+        ),
     }

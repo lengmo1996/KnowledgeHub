@@ -45,6 +45,18 @@ These commands create plans only: `scheduler_started=false`, downloads are
 disabled and alias/environment switches are forbidden. An external operator may
 use a reviewed plan to configure a scheduler later.
 
+Pinned dependency evidence is captured after synchronization:
+
+```bash
+knowledgehub source dependencies transformers --version 5.13.1
+knowledgehub validate dependencies --offline
+```
+
+This operation never resolves or installs packages. Declarations retain their
+file/field source and scope; package catalogs such as Transformers `_deps` are
+stored separately from install declarations. Manifests are content-hashed and
+must match the current version marker's tag, commit and source path.
+
 Runtime cleanup is explicit and dry-run by default:
 
 ```bash

@@ -227,3 +227,9 @@ def test_validate_index_cli_shape_and_offline_mode() -> None:
     assert args.target == "index"
     assert args.knowledge_base == "code"
     assert args.offline is True
+
+
+def test_validate_dependencies_cli_shape() -> None:
+    args = build_parser().parse_args(["validate", "dependencies", "--offline"])
+    assert args.target == "dependencies"
+    assert args.knowledge_base is None

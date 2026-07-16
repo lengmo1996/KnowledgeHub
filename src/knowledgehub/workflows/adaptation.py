@@ -268,6 +268,140 @@ class AdaptationWorkflow:
         atomic_write_text(report, self._markdown(state))
         return {**state, "report": str(report)}
 
+    def validate(self) -> dict[str, Any]:
+        """Audit a recorded adaptation against its pinned Git worktree."""
+        state = self._required_state()
+        errors: list[str] = []
+        commit = self._git_text("rev-parse", "HEAD")
+        if state.get("schema_name") != "adaptation_session":
+            errors.append("invalid adaptation session schema_name")
+        if state.get("schema_version") != "2.0":
+            errors.append("invalid adaptation session schema_version")
+        if state.get("repository_root") != str(self.repository):
+            errors.append("repository_root differs from the inspected worktree")
+        if not commit or state.get("upstream_commit") != commit:
+            errors.append("upstream_commit differs from the inspected worktree")
+
+        evidence_ids = [str(value) for value in state.get("evidence_packages") or []]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            errors.append("duplicate evidence package IDs")
+        for evidence_id in evidence_ids:
+            self._validate_evidence(evidence_id, commit or "", errors)
+
+        changes = state.get("changes") or []
+        for change in changes:
+            self._validate_change(change, set(evidence_ids), errors)
+
+        verifications = state.get("verifications") or []
+        for verification in verifications:
+            if not isinstance(verification, Mapping):
+                errors.append("verification record must be an object")
+                continue
+            expected_status = "passed" if verification.get("exit_code") == 0 else "failed"
+            if verification.get("status") != expected_status:
+                errors.append(
+                    f"verification status/exit mismatch: {verification.get('verification_id')}"
+                )
+            if len(str(verification.get("output_sha256") or "")) != 64:
+                errors.append(
+                    f"verification output hash is invalid: {verification.get('verification_id')}"
+                )
+        if state.get("status") == "completed":
+            if not evidence_ids or not changes or not verifications:
+                errors.append("completed session lacks evidence, changes, or verification")
+            if any(item.get("status") != "passed" for item in verifications):
+                errors.append("completed session contains a failed verification")
+            if not (self.destination / "adaptation_log.md").is_file():
+                errors.append("completed session lacks adaptation_log.md")
+        return {
+            "check": "adaptation",
+            "valid": not errors,
+            "repository": state.get("repository"),
+            "upstream_commit": state.get("upstream_commit"),
+            "checked": {
+                "evidence_packages": len(evidence_ids),
+                "changes": len(changes),
+                "verifications": len(verifications),
+            },
+            "errors": errors[:200],
+        }
+
+    def _validate_evidence(
+        self, evidence_id: str, commit: str, errors: list[str]
+    ) -> None:
+        path = self.destination / "evidence" / f"{evidence_id}.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            errors.append(f"missing or invalid evidence package: {evidence_id}")
+            return
+        if not isinstance(value, Mapping):
+            errors.append(f"evidence package must be an object: {evidence_id}")
+            return
+        if value.get("evidence_id") != evidence_id:
+            errors.append(f"evidence identity mismatch: {evidence_id}")
+        if value.get("upstream_commit") != commit:
+            errors.append(f"evidence commit mismatch: {evidence_id}")
+        if value.get("repository_root") != str(self.repository):
+            errors.append(f"evidence repository mismatch: {evidence_id}")
+        for item in value.get("affected_files") or []:
+            if not isinstance(item, Mapping):
+                errors.append(f"invalid affected file evidence: {evidence_id}")
+                continue
+            relative = str(item.get("path") or "")
+            before = self._git_bytes("show", f"HEAD:{relative}") if relative else None
+            if before is None or sha256_bytes(before) != item.get("content_sha256"):
+                errors.append(f"evidence source hash mismatch: {evidence_id}:{relative}")
+
+    def _validate_change(
+        self,
+        change: object,
+        evidence_ids: set[str],
+        errors: list[str],
+    ) -> None:
+        if not isinstance(change, Mapping):
+            errors.append("change record must be an object")
+            return
+        change_id = str(change.get("change_id") or "")
+        references = {str(value) for value in change.get("evidence_ids") or []}
+        missing = references - evidence_ids
+        if missing:
+            errors.append(f"change {change_id} references unknown evidence: {sorted(missing)[0]}")
+        files: list[str] = []
+        for item in change.get("affected_files") or []:
+            if not isinstance(item, Mapping):
+                errors.append(f"change {change_id} has an invalid affected file")
+                continue
+            relative = str(item.get("path") or "")
+            files.append(relative)
+            path = self.repository / relative
+            before = self._git_bytes("show", f"HEAD:{relative}")
+            try:
+                after = path.read_bytes()
+            except OSError:
+                errors.append(f"change {change_id} affected file is missing: {relative}")
+                continue
+            if (sha256_bytes(before) if before is not None else None) != item.get(
+                "before_sha256"
+            ):
+                errors.append(f"change {change_id} before hash mismatch: {relative}")
+            if sha256_bytes(after) != item.get("after_sha256"):
+                errors.append(f"change {change_id} after hash mismatch: {relative}")
+        patch = Path(str(change.get("patch") or ""))
+        if patch.parent != self.destination / "patches" or patch.name != f"{change_id}.diff":
+            errors.append(f"change {change_id} patch path is outside its session")
+        else:
+            current = self._git_text(
+                "diff", "--no-ext-diff", "--", *files, allow_empty=True
+            )
+            try:
+                recorded = patch.read_text(encoding="utf-8")
+            except OSError:
+                errors.append(f"change {change_id} patch is missing")
+            else:
+                if recorded != current[:200_000]:
+                    errors.append(f"change {change_id} patch differs from the worktree")
+
     def _source_snapshot(self, value: str) -> dict[str, Any]:
         relative = self._relative_path(value)
         path = self.repository / relative

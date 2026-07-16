@@ -29,6 +29,7 @@ libraries:
     package_name: transformers
     repository: huggingface/transformers
     tag_patterns: ["v{version}", "{version}"]
+    include: [README*, LICENSE*, docs/**, examples/**, src/transformers/**, setup.py, pyproject.toml, requirements*.txt, requirements/**/*.txt, RELEASE*, CHANGELOG*, MIGRATION*]
   diffusers:
     enabled: true
     package_name: diffusers

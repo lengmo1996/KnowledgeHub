@@ -75,6 +75,56 @@ class HubValidator:
         errors.extend(f"duplicate document_id: {value}" for value in sorted(duplicates))
         return self._result("normalized", checked, errors)
 
+    def dependencies(self) -> dict[str, Any]:
+        """Validate pinned dependency evidence without resolving or installing it."""
+        errors: list[str] = []
+        checked = 0
+        seen: set[tuple[str, str]] = set()
+        root = self.code_root / "manifests" / "dependencies"
+        manifests = sorted(root.glob("*/*.json")) if root.is_dir() else []
+        if not manifests:
+            errors.append(f"missing dependency manifests: {root}")
+        for manifest in manifests:
+            checked += 1
+            try:
+                value = json.loads(manifest.read_text(encoding="utf-8"))
+                if not isinstance(value, dict):
+                    raise ValueError("manifest must be an object")
+                library = str(value["library"])
+                version = str(value["version"])
+                commit = str(value["commit"])
+                dependencies = value["dependencies"]
+                if value.get("schema_name") != "dependency_manifest":
+                    errors.append(f"{manifest} has an invalid schema_name")
+                if value.get("schema_version") != "2.0":
+                    errors.append(f"{manifest} has an invalid schema_version")
+                identity = (library, version)
+                if identity in seen:
+                    errors.append(f"duplicate dependency manifest: {library} {version}")
+                seen.add(identity)
+                if manifest.parent.name != library or manifest.stem != version:
+                    errors.append(f"dependency manifest path/identity mismatch: {manifest}")
+                if not isinstance(dependencies, list):
+                    raise ValueError("dependencies must be a list")
+                if value.get("dependency_count") != len(dependencies):
+                    errors.append(f"{manifest} dependency_count mismatch")
+                if value.get("content_hash") != sha256_json(dependencies):
+                    errors.append(f"{manifest} content_hash mismatch")
+                marker = (
+                    self.code_root
+                    / "sources"
+                    / "repositories"
+                    / library
+                    / version
+                    / "current.json"
+                )
+                self._validate_dependency_marker(marker, commit, value, manifest, errors)
+                for index, dependency in enumerate(dependencies, 1):
+                    self._validate_dependency(dependency, manifest, index, errors)
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                errors.append(f"invalid dependency manifest {manifest}: {error}")
+        return self._result("dependencies", checked, errors)
+
     def writing(self) -> dict[str, Any]:
         path = self.writing_root / "derived" / "writing_entries.jsonl"
         errors: list[str] = []
@@ -161,7 +211,7 @@ class HubValidator:
         *,
         indexes: Mapping[str, tuple[Any | None, str | None]] | None = None,
     ) -> dict[str, Any]:
-        checks = [self.sources(), self.normalized(), self.writing()]
+        checks = [self.sources(), self.normalized(), self.dependencies(), self.writing()]
         for knowledge_base in ("code", "writing"):
             if knowledge_base not in self.rag_dirs:
                 continue
@@ -174,6 +224,61 @@ class HubValidator:
                 )
             )
         return {"valid": all(item["valid"] for item in checks), "checks": checks}
+
+    @staticmethod
+    def _validate_dependency_marker(
+        marker: Path,
+        commit: str,
+        manifest: Mapping[str, Any],
+        path: Path,
+        errors: list[str],
+    ) -> None:
+        if not marker.is_file():
+            errors.append(f"{path} has no synchronized source marker: {marker}")
+            return
+        try:
+            value = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            errors.append(f"{path} has an unreadable source marker: {marker}")
+            return
+        if not isinstance(value, dict):
+            errors.append(f"{path} has an invalid source marker: {marker}")
+            return
+        if len(commit) != 40 or value.get("commit") != commit:
+            errors.append(f"{path} commit differs from synchronized source marker")
+        if value.get("tag") != manifest.get("tag"):
+            errors.append(f"{path} tag differs from synchronized source marker")
+        if value.get("source_path") != manifest.get("source_path"):
+            errors.append(f"{path} source_path differs from synchronized source marker")
+
+    @staticmethod
+    def _validate_dependency(
+        dependency: object,
+        path: Path,
+        index: int,
+        errors: list[str],
+    ) -> None:
+        prefix = f"{path} dependency {index}"
+        if not isinstance(dependency, Mapping):
+            errors.append(f"{prefix} must be an object")
+            return
+        for field in (
+            "package",
+            "normalized_package",
+            "source",
+            "evidence_kind",
+            "relation",
+            "scope",
+        ):
+            if not dependency.get(field):
+                errors.append(f"{prefix} missing {field}")
+        if dependency.get("inference") is not False:
+            errors.append(f"{prefix} must be explicit evidence, not inference")
+        confidence = dependency.get("confidence")
+        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+            errors.append(f"{prefix} has invalid confidence")
+        elif not 0.0 <= float(confidence) <= 1.0:
+            errors.append(f"{prefix} confidence is outside [0, 1]")
 
     @staticmethod
     def _index_state(

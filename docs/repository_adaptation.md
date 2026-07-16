@@ -67,6 +67,17 @@ knowledgehub repository finalize /path/to/repository \
 `adaptation_log.md` are idempotent runtime artifacts. Evidence cannot be
 silently replaced after a change is recorded.
 
+Audit a completed session without modifying it:
+
+```bash
+knowledgehub repository validate /path/to/repository \
+  --output-root /data/KnowledgeHub/reports
+```
+
+The audit compares the recorded upstream commit, evidence snapshots,
+before/after hashes and stored patch to the pinned Git worktree, and checks
+verification status consistency. It does not rerun target-repository commands.
+
 ## Debug logs
 
 ```bash

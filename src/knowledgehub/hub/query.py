@@ -21,9 +21,21 @@ _INTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 _SOURCE_PRIORITIES: Mapping[str, tuple[str, ...]] = {
     "api_usage": ("api_documentation", "tutorial", "example", "source_code"),
     "implementation": ("api_documentation", "example", "source_code", "tutorial"),
-    "debug": ("source_code", "release_note", "issue", "pull_request"),
-    "compatibility": ("migration_guide", "release_note", "api_documentation", "source_code"),
-    "migration": ("migration_guide", "release_note", "api_documentation", "example"),
+    "debug": ("source_code", "version_diff", "release_note", "issue", "pull_request"),
+    "compatibility": (
+        "version_diff",
+        "migration_guide",
+        "release_note",
+        "api_documentation",
+        "source_code",
+    ),
+    "migration": (
+        "migration_guide",
+        "version_diff",
+        "release_note",
+        "api_documentation",
+        "example",
+    ),
     "source_understanding": ("source_code", "api_documentation", "example"),
 }
 
@@ -78,13 +90,14 @@ def classify_code_intent(query: str, explicit: str | None = None) -> str:
 def build_code_query_plan(
     query: str,
     *,
+    intent: str | None = None,
     environment: str = "current",
     library: str | None = None,
     symbol: str | None = None,
     allow_auto_import: bool = False,
     allow_issues: bool = False,
 ) -> dict[str, Any]:
-    intent = classify_code_intent(query)
+    intent = classify_code_intent(query, intent)
     steps = ["find_symbol_current"] if symbol else ["search_current_documentation"]
     if intent in {"compatibility", "migration"}:
         steps.extend(["find_symbol_target", "find_release_changes", "find_related_source_diff"])
@@ -298,7 +311,11 @@ class HubQueryService:
             role = "target_version_evidence"
         elif version and version == str(filters.get("installed_version") or ""):
             role = "current_version_evidence"
-        elif payload.get("source_type") in {"release_note", "migration_guide"}:
+        elif payload.get("source_type") in {
+            "release_note",
+            "migration_guide",
+            "version_diff",
+        }:
             role = "change_evidence"
         else:
             role = "retrieved_evidence"

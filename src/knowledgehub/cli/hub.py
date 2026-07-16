@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from knowledgehub.code_rag.build import CodeBuildService
+from knowledgehub.code_rag.dependencies import DependencyManifestService
+from knowledgehub.code_rag.diffs import VersionDiffBuildService
 from knowledgehub.code_rag.environment import EnvironmentCapture
 from knowledgehub.code_rag.maintenance import OnDemandVersionImporter, ReleaseWatchService
 from knowledgehub.code_rag.registry import CodeSourceRegistry
@@ -30,6 +32,10 @@ def add_hub_parsers(subparsers: Any) -> None:
     source_commands.add_parser("list")
     inspect = source_commands.add_parser("inspect")
     inspect.add_argument("library")
+    dependencies = source_commands.add_parser("dependencies")
+    dependencies.add_argument("library")
+    dependencies.add_argument("--version", required=True)
+    dependencies.add_argument("--dry-run", action="store_true")
 
     environment = subparsers.add_parser("environment", help="Capture a sanitized environment")
     environment_commands = environment.add_subparsers(dest="environment_command", required=True)
@@ -79,6 +85,13 @@ def add_hub_parsers(subparsers: Any) -> None:
     )
     build_code.add_argument("--dry-run", action="store_true")
     build_code.add_argument("--prune", action="store_true")
+    build_diff = build_commands.add_parser("diff")
+    build_diff.add_argument("--library", required=True)
+    build_diff.add_argument("--from-version", required=True)
+    build_diff.add_argument("--to-version", required=True)
+    build_diff.add_argument("--symbol", action="append", dest="symbols", default=[])
+    build_diff.add_argument("--limit", type=int, default=20)
+    build_diff.add_argument("--dry-run", action="store_true")
 
     derive = subparsers.add_parser("derive", help="Derive knowledge from an existing base")
     derive_commands = derive.add_subparsers(dest="derive_domain", required=True)
@@ -145,9 +158,44 @@ def run_hub_command(args: argparse.Namespace) -> int:
                         ]
                     }
                 )
-            else:
+            elif args.hub_source_command == "inspect":
                 item = registry.get(args.library)
                 _emit(dataclasses.asdict(item) | {"installed_version": item.installed_version()})
+            else:
+                dependency_service = DependencyManifestService(
+                    registry, config.code.data_root
+                )
+
+                def dependency_operation() -> dict[str, Any]:
+                    return dependency_service.capture(
+                        args.library, args.version, dry_run=False
+                    )
+
+                if args.dry_run:
+                    result = dependency_service.capture(
+                        args.library, args.version, dry_run=True
+                    )
+                else:
+                    marker = (
+                        config.code.data_root
+                        / "sources"
+                        / "repositories"
+                        / args.library
+                        / args.version
+                        / "current.json"
+                    )
+                    result = _task_executor().execute(
+                        "dependency_capture",
+                        dependency_operation,
+                        knowledge_base="code",
+                        library=args.library,
+                        version=args.version,
+                        inputs={"version": args.version},
+                        input_manifest=str(marker),
+                        lock_keys=(f"library:{args.library}",),
+                        output_manifest=lambda value: str(value["manifest"]),
+                    )
+                _emit(result)
             return 0
         if args.source == "environment":
             result = EnvironmentCapture(config.code.data_root).capture(
@@ -309,6 +357,59 @@ def run_hub_command(args: argparse.Namespace) -> int:
             )
         if args.source == "build":
             rag_config = config.rag_config("code")
+            if args.build_domain == "diff":
+                diff_service = VersionDiffBuildService(
+                    registry, config.code.data_root, rag_config
+                )
+                try:
+                    def diff_operation() -> dict[str, Any]:
+                        return diff_service.build(
+                            args.library,
+                            args.from_version,
+                            args.to_version,
+                            symbols=args.symbols,
+                            limit=args.limit,
+                            dry_run=False,
+                        )
+
+                    if args.dry_run:
+                        diff_result = diff_service.build(
+                            args.library,
+                            args.from_version,
+                            args.to_version,
+                            symbols=args.symbols,
+                            limit=args.limit,
+                            dry_run=True,
+                        )
+                    else:
+                        diff_result = _task_executor().execute(
+                            "code_diff_build",
+                            diff_operation,
+                            knowledge_base="code",
+                            library=args.library,
+                            version=args.to_version,
+                            inputs={
+                                "from_version": args.from_version,
+                                "limit": args.limit,
+                                "symbols": list(args.symbols),
+                                "to_version": args.to_version,
+                            },
+                            input_manifest=str(
+                                config.code.data_root / "state" / "symbols.sqlite3"
+                            ),
+                            lock_keys=(
+                                f"library:{args.library}",
+                                f"index:code:{rag_config.qdrant_collection}",
+                            ),
+                            output_manifest=lambda result: str(
+                                result.get("normalized_manifest") or ""
+                            )
+                            or None,
+                        )
+                finally:
+                    diff_service.close()
+                _emit(diff_result)
+                return 0 if diff_result["status"] == "success" else 1
             if args.candidate_collection:
                 if args.candidate_collection == config.knowledge_bases["code"].collection:
                     raise ValueError(
@@ -447,6 +548,7 @@ def run_hub_command(args: argparse.Namespace) -> int:
             plan = (
                 build_code_query_plan(
                     args.query,
+                    intent=args.intent,
                     environment=args.environment,
                     library=args.library,
                     symbol=args.symbol,

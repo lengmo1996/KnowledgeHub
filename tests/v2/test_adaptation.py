@@ -86,6 +86,19 @@ def test_evidence_change_verification_and_log_are_traceable(tmp_path: Path) -> N
     assert result["status"] == "completed"
     report = Path(result["report"])
     assert report.is_file() and "full training was not run" in report.read_text(encoding="utf-8")
+    audit = workflow.validate()
+    assert audit["valid"] is True
+    assert audit["checked"] == {
+        "evidence_packages": 1,
+        "changes": 1,
+        "verifications": 1,
+    }
+
+    (root / "train.py").write_text("Trainer(gpus=8)\n", encoding="utf-8")
+    invalid = workflow.validate()
+    assert invalid["valid"] is False
+    assert any("after hash mismatch" in error for error in invalid["errors"])
+    assert any("patch differs" in error for error in invalid["errors"])
 
 
 def test_adaptation_requires_evidence_and_contained_files(tmp_path: Path) -> None:

@@ -13,6 +13,11 @@ knowledgehub environment capture --name rag
 knowledgehub sync code --library transformers --version installed --dry-run
 knowledgehub sync code --library transformers --version installed
 knowledgehub build code --library transformers --incremental
+knowledgehub source dependencies transformers --version 5.13.1
+knowledgehub symbol build transformers 5.13.0
+knowledgehub symbol build transformers 5.13.1
+knowledgehub build diff --library transformers \
+  --from-version 5.13.0 --to-version 5.13.1 --limit 20
 ```
 
 The default Transformers strategy selects the installed stable version, the
@@ -52,6 +57,21 @@ Every result carries library, package, version, repository, tag, commit, path,
 symbol/section, source URL, content hash and retrieval timestamp. Compatibility
 queries additionally label current-version, target-version and change evidence;
 retrieval evidence is not represented as an official conclusion.
+
+Dependency manifests are version/commit pinned and generated only from static
+project files. PEP 621, requirements files, setup.cfg and literal
+`setup(install_requires=[...])` records are declaration evidence. A static
+`setup.py:_deps` table is retained as `dependency_catalog` with
+`relation=lists_dependency`, not promoted to a runtime requirement. Validate
+all manifests and their current source markers with
+`knowledgehub validate dependencies --offline`.
+
+Version-diff builds align exact Symbol Catalog entries from two already
+synchronized versions. They emit bounded `version_diff` documents with both
+commits, line locations, deterministic signature changes and a source patch.
+`evidence_role=system_derived_source_diff` distinguishes derived evidence from
+official release prose. Builds are incremental, never prune unrelated Code
+documents and require an explicit version pair.
 
 ## Configuration and failures
 

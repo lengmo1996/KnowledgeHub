@@ -52,6 +52,10 @@ def _resolved_expression(node: ast.AST, aliases: Mapping[str, str]) -> str:
 class RepositoryIntake:
     root: Path
 
+    def dependencies(self) -> list[dict[str, str]]:
+        """Return static dependency declarations without executing repository code."""
+        return self._dependencies(self.root.resolve(strict=True))
+
     def inspect(self, environment: Mapping[str, Any]) -> dict[str, Any]:
         """Build the intake result without writing files or executing repository code."""
         root = self.root.resolve(strict=True)
@@ -304,6 +308,35 @@ class RepositoryIntake:
                 for requirement in dependencies if isinstance(dependencies, list) else ():
                     if isinstance(requirement, str):
                         add(requirement, "setup.py:_deps")
+            for walked_node in ast.walk(tree):
+                if not isinstance(walked_node, ast.Call):
+                    continue
+                function = walked_node.func
+                if not (
+                    (isinstance(function, ast.Name) and function.id == "setup")
+                    or (
+                        isinstance(function, ast.Attribute)
+                        and function.attr == "setup"
+                    )
+                ):
+                    continue
+                keyword = next(
+                    (
+                        item
+                        for item in walked_node.keywords
+                        if item.arg == "install_requires"
+                    ),
+                    None,
+                )
+                if keyword is None:
+                    continue
+                try:
+                    requirements = ast.literal_eval(keyword.value)
+                except (ValueError, TypeError):
+                    continue
+                for requirement in requirements if isinstance(requirements, list) else ():
+                    if isinstance(requirement, str):
+                        add(requirement, "setup.py:setup.install_requires")
         return sorted(result.values(), key=lambda item: item["package"].lower())
 
     @staticmethod

@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from os import environ
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any, Mapping
 
 from knowledgehub.core.hashing import canonical_json_dumps, sha256_json
@@ -90,8 +91,11 @@ class TaskStore:
             existing = connection.execute(
                 "SELECT * FROM tasks WHERE idempotency_key=?", (key,)
             ).fetchone()
-            if existing and existing["status"] == "running" and self._is_stale(
-                str(existing["started_at"]), stale_after_seconds
+            if (
+                existing
+                and existing["status"] == "running"
+                and self._is_stale(str(existing["started_at"]), stale_after_seconds)
+                and not self._has_live_lock(connection, str(existing["task_id"]))
             ):
                 recovered_at = _now().isoformat()
                 connection.execute(
@@ -218,6 +222,28 @@ class TaskStore:
             else:
                 raise ValueError("task_id is required unless force is true")
 
+    def renew(
+        self, lock_keys: Sequence[str], task_id: str, *, ttl_seconds: int = 3600
+    ) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError("ttl_seconds must be positive")
+        keys = sorted(set(lock_keys))
+        if not keys:
+            return
+        now = _now()
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            renewed = 0
+            for lock_key in keys:
+                renewed += connection.execute(
+                    """UPDATE locks SET expires_at=?
+                       WHERE lock_key=? AND task_id=? AND expires_at>?""",
+                    (expires_at, lock_key, task_id, now.isoformat()),
+                ).rowcount
+            if renewed != len(keys):
+                raise TaskConflictError(f"task lock lease was lost: {task_id}")
+
     def list_tasks(self, limit: int = 50) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -269,6 +295,14 @@ class TaskStore:
             started = started.replace(tzinfo=timezone.utc)
         return _now() - started > timedelta(seconds=stale_after_seconds)
 
+    @staticmethod
+    def _has_live_lock(connection: sqlite3.Connection, task_id: str) -> bool:
+        row = connection.execute(
+            "SELECT 1 FROM locks WHERE task_id=? AND expires_at>? LIMIT 1",
+            (task_id, _now().isoformat()),
+        ).fetchone()
+        return row is not None
+
 
 class TaskExecutor:
     """Execute one operation under a durable task record and expiring locks."""
@@ -289,6 +323,7 @@ class TaskExecutor:
         lock_keys: Sequence[str] = (),
         output_manifest: Callable[[Mapping[str, Any]], str | None] | None = None,
         ttl_seconds: int = 21600,
+        heartbeat_interval_seconds: float | None = None,
     ) -> dict[str, Any]:
         task = self.store.begin(
             task_type,
@@ -304,11 +339,43 @@ class TaskExecutor:
         if not task["execution_required"]:
             raise TaskConflictError(f"equivalent task is already running: {task_id}")
         acquired: list[str] = []
+        heartbeat_stop = Event()
+        heartbeat_errors: list[Exception] = []
+        heartbeat: Thread | None = None
         try:
             for lock_key in sorted(set(lock_keys)):
                 self.store.acquire(lock_key, task_id, ttl_seconds=ttl_seconds)
                 acquired.append(lock_key)
+            if acquired:
+                interval = (
+                    heartbeat_interval_seconds
+                    if heartbeat_interval_seconds is not None
+                    else max(0.1, min(60.0, ttl_seconds / 3))
+                )
+                if interval <= 0 or interval >= ttl_seconds:
+                    raise ValueError(
+                        "heartbeat interval must be positive and shorter than lock TTL"
+                    )
+                heartbeat = Thread(
+                    target=self._heartbeat,
+                    args=(
+                        heartbeat_stop,
+                        heartbeat_errors,
+                        tuple(acquired),
+                        task_id,
+                        ttl_seconds,
+                        interval,
+                    ),
+                    name=f"knowledgehub-task-{task_id[:8]}",
+                    daemon=True,
+                )
+                heartbeat.start()
             result = operation()
+            heartbeat_stop.set()
+            if heartbeat is not None:
+                heartbeat.join(timeout=max(1.0, heartbeat_interval_seconds or 1.0) + 1.0)
+            if heartbeat_errors:
+                raise TaskConflictError(str(heartbeat_errors[0]))
             terminal = self._terminal_status(result)
             manifest = output_manifest(result) if output_manifest else None
             self.store.finish(
@@ -328,6 +395,9 @@ class TaskExecutor:
                 self.store.finish(task_id, "failed", error=str(error)[:2000])
             raise
         finally:
+            heartbeat_stop.set()
+            if heartbeat is not None and heartbeat.is_alive():
+                heartbeat.join(timeout=2.0)
             for lock_key in reversed(acquired):
                 self.store.release(lock_key, task_id=task_id)
 
@@ -351,3 +421,20 @@ class TaskExecutor:
             "reused": reused,
             "lock_keys": list(lock_keys),
         }
+
+    def _heartbeat(
+        self,
+        stop: Event,
+        errors: list[Exception],
+        lock_keys: Sequence[str],
+        task_id: str,
+        ttl_seconds: int,
+        interval_seconds: float,
+    ) -> None:
+        while not stop.wait(interval_seconds):
+            try:
+                self.store.renew(lock_keys, task_id, ttl_seconds=ttl_seconds)
+            except Exception as error:
+                errors.append(error)
+                stop.set()
+                return

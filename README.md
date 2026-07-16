@@ -101,6 +101,26 @@ Dry-runs intentionally do not create TaskStore rows. A failed or partial task
 increments `retry_count` on its next attempt. Running tasks older than the
 six-hour lock TTL are marked `stale_task_recovered` and can resume safely.
 
+V2.0.3 renews every owned task lock while work is running, so a healthy task
+can safely exceed the initial lease. Lease loss fails closed. It also adds
+pinned dependency evidence, bounded source-diff documents and read-only
+adaptation-session audits:
+
+```bash
+knowledgehub source dependencies transformers --version 5.13.1
+knowledgehub validate dependencies --offline
+knowledgehub symbol build transformers 5.13.0
+knowledgehub symbol build transformers 5.13.1
+knowledgehub build diff --library transformers \
+  --from-version 5.13.0 --to-version 5.13.1 --limit 20
+knowledgehub repository validate /path/to/repo \
+  --output-root /data/KnowledgeHub/reports
+```
+
+`setup.py` is parsed only as AST. Literal `install_requires` is declared
+dependency evidence; `_deps` tables are explicitly catalog evidence and are
+never presented as proof that every listed package is installed at runtime.
+
 ## V2 governance and code intelligence
 
 V2 keeps V1 collections and embedding settings while adding explicit schema
@@ -119,6 +139,7 @@ knowledgehub index promote code --yes
 knowledgehub index rollback-alias code --yes
 knowledgehub symbol build transformers 5.13.1
 knowledgehub symbol compare transformers 5.13.0 5.13.1 PreTrainedModel.from_pretrained
+knowledgehub build diff --library transformers --from-version 5.13.0 --to-version 5.13.1 --limit 20
 knowledgehub query code "why did this API fail?" --symbol SomeClass.method --explain-plan
 knowledgehub repository analyze /path/to/repo --environment workstation-3090 --output-root /data/KnowledgeHub/reports
 knowledgehub repository evidence /path/to/repo --issue "Trainer rejects gpus" \
@@ -131,6 +152,7 @@ knowledgehub repository record-change /path/to/repo --file configs/trainer/debug
 knowledgehub repository record-verification /path/to/repo --name syntax \
   --command "python -m py_compile train.py" --exit-code 0 --output "passed"
 knowledgehub repository finalize /path/to/repo --risk "full training not run"
+knowledgehub repository validate /path/to/repo --output-root /data/KnowledgeHub/reports
 knowledgehub writing-v2 similarity "candidate paragraph"
 knowledgehub writing-v2 profile venue NeurIPS-selected --paper-id <paper-id> \
   --section Introduction --section Method --section Experiment

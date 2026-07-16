@@ -121,6 +121,45 @@ class SymbolIndex:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def changed_pairs(
+        self, library: str, from_version: str, to_version: str, *, limit: int = 20
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        with self._connection() as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """SELECT old.symbol_id AS old_symbol_id,
+                          old.library AS old_library,old.version AS old_version,
+                          old.module AS old_module,old.qualified_name AS old_qualified_name,
+                          old.symbol_type AS old_symbol_type,old.path AS old_path,
+                          old.start_line AS old_start_line,old.end_line AS old_end_line,
+                          old.signature AS old_signature,
+                          old.docstring_hash AS old_docstring_hash,old.ast_hash AS old_ast_hash,
+                          new.symbol_id AS new_symbol_id,
+                          new.library AS new_library,new.version AS new_version,
+                          new.module AS new_module,new.qualified_name AS new_qualified_name,
+                          new.symbol_type AS new_symbol_type,new.path AS new_path,
+                          new.start_line AS new_start_line,new.end_line AS new_end_line,
+                          new.signature AS new_signature,
+                          new.docstring_hash AS new_docstring_hash,new.ast_hash AS new_ast_hash
+                   FROM symbols AS old
+                   JOIN symbols AS new
+                     ON new.library=old.library
+                    AND new.qualified_name=old.qualified_name
+                   WHERE old.library=? AND old.version=? AND new.version=?
+                     AND old.ast_hash<>new.ast_hash
+                   ORDER BY old.qualified_name LIMIT ?""",
+                (library, from_version, to_version, limit),
+            ).fetchall()
+        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for row in rows:
+            value = dict(row)
+            old = {key.removeprefix("old_"): item for key, item in value.items() if key.startswith("old_")}
+            new = {key.removeprefix("new_"): item for key, item in value.items() if key.startswith("new_")}
+            pairs.append((old, new))
+        return pairs
+
     def _connection(self) -> sqlite3.Connection:
         if self.read_only:
             return sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
@@ -169,7 +208,9 @@ def _signature(node: ast.AST) -> str:
     if isinstance(node, ast.ClassDef):
         return f"class {node.name}({', '.join(ast.unparse(base) for base in node.bases)})"
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return f"{node.name}{ast.unparse(node.args)}" + (f" -> {ast.unparse(node.returns)}" if node.returns else "")
+        return f"{node.name}({ast.unparse(node.args)})" + (
+            f" -> {ast.unparse(node.returns)}" if node.returns else ""
+        )
     return ""
 
 

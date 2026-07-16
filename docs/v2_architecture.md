@@ -54,3 +54,16 @@ task older than the six-hour TTL is closed as `stale_task_recovered`, its stale
 locks are removed and a retry attempt starts. Dry-run commands bypass TaskStore
 so planning remains free of persistent state. The existing Literature pipeline
 keeps its own frozen state machine.
+
+V2.0.3 adds lease heartbeat to every TaskExecutor-held lock. The default
+renewal interval is the lesser of 60 seconds and one third of the TTL. Renewal
+is atomic across the task's lock set; a missing, expired or stolen lease fails
+the task instead of allowing unprotected continuation. Stale recovery checks
+for a live lease, so an actively renewed long-running task is not recovered
+solely because its original `started_at` exceeds the TTL.
+
+Code dependency manifests and source-diff documents remain derived evidence.
+They reference immutable source markers and do not execute setup files,
+resolve environments or claim upstream compatibility conclusions. Adaptation
+validation is likewise read-only: it checks an existing report against its Git
+worktree but does not rerun recorded verification commands.

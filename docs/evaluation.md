@@ -74,3 +74,10 @@ The repository-adaptation group now includes two public, fixed-commit cases:
 These fixtures expect exact symbol evidence and explicit verification
 boundaries. Syntax or signature-contract success must not be scored as full
 model training success.
+
+The compatibility fixture also includes a pinned Transformers 5.13.0→5.13.1
+`_LazyAutoMapping.register` case. It expects `version_diff` evidence and the
+exact symbol while preserving the distinction between derived source changes
+and official release conclusions. The public fixture set contains 24 samples;
+private Personal Profile material and user acceptance labels remain outside
+Git and are excluded when no user-provided data exists.

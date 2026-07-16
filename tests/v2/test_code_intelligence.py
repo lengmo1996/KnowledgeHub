@@ -32,6 +32,15 @@ def test_symbol_relations_and_signature_diff(tmp_path: Path) -> None:
     assert any(item["relation"] == "calls" for item in symbol["relations"])
     changes = signature_diff("run(x, old=1)", "run(x, new=1)")
     assert changes["added_parameters"] == ["new"]
+    typed = signature_diff(
+        "run(x: Config) -> Model", "run(x: Config | str) -> Model | None"
+    )
+    assert typed["type_changes"] == [
+        {"parameter": "x", "from": "Config", "to": "Config | str"}
+    ]
+    assert typed["return_changes"] == [
+        {"from": "Model", "to": "Model | None"}
+    ]
     assert compare_symbols(symbol, {**symbol, "signature": "forward(x, flag=False)", "ast_hash": "different"})["status"] == "signature_changed"
 
 
