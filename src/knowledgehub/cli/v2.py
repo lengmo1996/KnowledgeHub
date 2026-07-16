@@ -20,7 +20,7 @@ from knowledgehub.evaluation.runner import (
 from knowledgehub.governance.maintenance import CleanupService
 from knowledgehub.governance.release import validate_release_manifest
 from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexSnapshotManager
-from knowledgehub.governance.tasks import TaskStore
+from knowledgehub.governance.tasks import TaskStore, default_task_store_path
 from knowledgehub.governance.validation import HubValidator
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.hub.query import HubQueryRequest, HubQueryService
@@ -118,6 +118,8 @@ def add_v2_parsers(subparsers: Any) -> None:
     task_commands = task.add_subparsers(dest="task_command", required=True)
     listing = task_commands.add_parser("list")
     listing.add_argument("--limit", type=int, default=50)
+    inspect_task = task_commands.add_parser("inspect")
+    inspect_task.add_argument("task_id")
     unlock = task_commands.add_parser("unlock")
     unlock.add_argument("lock_key")
     unlock.add_argument("--force", action="store_true", required=True)
@@ -334,9 +336,21 @@ def run_v2_command(args: argparse.Namespace) -> int:
             return _emit(promotion.rollback(args.knowledge_base, confirmed=args.yes))
         return _emit(promotion.status(args.knowledge_base, collection))
     if args.source == "task":
-        store = TaskStore(Path("/data/KnowledgeHub/state/tasks.sqlite3"))
+        store = TaskStore(default_task_store_path())
         if args.task_command == "list":
             return _emit({"tasks": store.list_tasks(args.limit)})
+        if args.task_command == "inspect":
+            task_value = store.get(args.task_id)
+            if task_value is None:
+                _emit({"status": "not_found", "task_id": args.task_id})
+                return 1
+            return _emit(
+                {
+                    "task": task_value,
+                    "result": store.result(args.task_id),
+                    "attempts": store.list_attempts(args.task_id),
+                }
+            )
         store.release(args.lock_key, force=args.force)
         return _emit({"status": "unlocked", "lock_key": args.lock_key})
     if args.source == "validate":

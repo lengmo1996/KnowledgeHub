@@ -78,4 +78,4 @@ def test_release_cli_is_offline_and_has_safe_defaults() -> None:
 
 
 def test_package_version_marks_current_v2_patch() -> None:
-    assert __version__ == "0.2.1"
+    assert __version__ == "0.2.2"

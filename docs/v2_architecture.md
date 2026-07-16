@@ -40,3 +40,17 @@ point counts and bidirectional point membership. `validate index code|writing`
 checks Qdrant by default; `--offline` stops at local artifacts. `validate all`
 includes both indexes. Frozen `rules-v1` Writing identity is resolved from
 `document_id`, while newer `metadata.writing_id` values are checked when present.
+
+V2.0.2 connects the central TaskStore to mutating Code and Writing CLI paths.
+One idempotency key represents a logical operation, while an append-only
+`attempts` table preserves every execution. Equivalent running tasks are
+rejected before work starts. Resource locks are acquired in sorted order and
+always released in reverse order; library locks serialize source mutation and
+index locks serialize writes to one physical collection.
+
+Completed operations may run again, preserving release checks and incremental
+build semantics. Failed or partial reruns increment `retry_count`. A running
+task older than the six-hour TTL is closed as `stale_task_recovered`, its stale
+locks are removed and a retry attempt starts. Dry-run commands bypass TaskStore
+so planning remains free of persistent state. The existing Literature pipeline
+keeps its own frozen state machine.

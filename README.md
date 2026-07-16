@@ -85,6 +85,22 @@ Frozen `rules-v1` Writing chunks identify entries through `document_id`; newer
 chunks may additionally carry `metadata.writing_id`. Both representations are
 validated without rewriting the active Writing index.
 
+V2.0.2 adds durable task lifecycle and lock enforcement to non-dry-run Code
+sync, Release Watch, on-demand version import, Code build and Writing derive
+commands. Repeated completed operations create a new attempt under the same
+logical task; a concurrent equivalent request or conflicting resource lock is
+rejected.
+
+```bash
+knowledgehub task list
+knowledgehub task inspect <task-id>
+knowledgehub task unlock <lock-key> --force
+```
+
+Dry-runs intentionally do not create TaskStore rows. A failed or partial task
+increments `retry_count` on its next attempt. Running tasks older than the
+six-hour lock TTL are marked `stale_task_recovered` and can resume safely.
+
 ## V2 governance and code intelligence
 
 V2 keeps V1 collections and embedding settings while adding explicit schema

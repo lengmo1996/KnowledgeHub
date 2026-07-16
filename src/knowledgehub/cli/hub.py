@@ -6,7 +6,7 @@ import argparse
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from knowledgehub.code_rag.build import CodeBuildService
 from knowledgehub.code_rag.environment import EnvironmentCapture
@@ -14,6 +14,7 @@ from knowledgehub.code_rag.maintenance import OnDemandVersionImporter, ReleaseWa
 from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.governance.maintenance import SyncPlanner
+from knowledgehub.governance.tasks import TaskExecutor, TaskStore, default_task_store_path
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.hub.query import (
     HubQueryRequest,
@@ -178,20 +179,78 @@ def run_hub_command(args: argparse.Namespace) -> int:
                     if args.all
                     else [args.library]
                 )
-                results = [
-                    ReleaseWatchService(config, registry).check(name, dry_run=args.dry_run)
-                    for name in names
-                ]
+                watch = ReleaseWatchService(config, registry)
+                executor = None if args.dry_run else _task_executor()
+                results: list[dict[str, Any]] = []
+                for name in names:
+                    def release_operation(selected: str = name) -> dict[str, Any]:
+                        return watch.check(selected, dry_run=False)
+
+                    def release_output_manifest(
+                        _result: Mapping[str, Any], selected: str = name
+                    ) -> str:
+                        return str(
+                            config.code.data_root
+                            / "state"
+                            / "release-watch"
+                            / f"{selected}.json"
+                        )
+
+                    if executor is None:
+                        result = watch.check(name, dry_run=True)
+                    else:
+                        result = executor.execute(
+                            "release_watch",
+                            release_operation,
+                            knowledge_base="code",
+                            library=name,
+                            inputs={"library": name},
+                            input_manifest=str(config.code.registry),
+                            lock_keys=(f"library:{name}",),
+                            output_manifest=release_output_manifest,
+                        )
+                    results.append(result)
                 _emit({"results": results})
                 return 0
             if args.sync_domain == "version":
-                result = OnDemandVersionImporter(config, registry).import_version(
-                    args.library,
-                    args.version,
-                    allowed=args.allow_download,
-                    build_limit=args.build_limit,
-                    dry_run=args.dry_run,
-                )
+                importer = OnDemandVersionImporter(config, registry)
+
+                def version_operation() -> dict[str, Any]:
+                    return importer.import_version(
+                        args.library,
+                        args.version,
+                        allowed=True,
+                        build_limit=args.build_limit,
+                        dry_run=False,
+                    )
+
+                if args.dry_run or not args.allow_download:
+                    result = importer.import_version(
+                        args.library,
+                        args.version,
+                        allowed=args.allow_download,
+                        build_limit=args.build_limit,
+                        dry_run=args.dry_run,
+                    )
+                else:
+                    code_collection = config.rag_config("code").qdrant_collection
+                    result = _task_executor().execute(
+                        "code_version_import",
+                        version_operation,
+                        knowledge_base="code",
+                        library=args.library,
+                        version=args.version,
+                        inputs={
+                            "allow_download": True,
+                            "build_limit": args.build_limit,
+                        },
+                        input_manifest=str(config.code.registry),
+                        lock_keys=(
+                            f"library:{args.library}",
+                            f"index:code:{code_collection}",
+                        ),
+                        output_manifest=_version_import_output,
+                    )
                 _emit(result)
                 return 0 if result["status"] != "permission_required" else 2
             sync_service = CodeSyncService(
@@ -206,10 +265,44 @@ def run_hub_command(args: argparse.Namespace) -> int:
                 if args.all
                 else [args.library]
             )
-            sync_results = [
-                sync_service.sync(name, version=args.version, dry_run=args.dry_run)
-                for name in names
-            ]
+            sync_results: list[dict[str, Any]] = []
+            executor = None if args.dry_run else _task_executor()
+            for name in names:
+                def sync_operation(selected: str = name) -> dict[str, Any]:
+                    return sync_service.sync(
+                        selected, version=args.version, dry_run=False
+                    )
+
+                def sync_output_manifest(
+                    _result: Mapping[str, Any], selected: str = name
+                ) -> str:
+                    return str(
+                        config.code.data_root
+                        / "manifests"
+                        / f"sync-{selected}.json"
+                    )
+
+                if executor is None:
+                    result = sync_service.sync(
+                        name, version=args.version, dry_run=True
+                    )
+                else:
+                    result = executor.execute(
+                        "code_sync",
+                        sync_operation,
+                        knowledge_base="code",
+                        library=name,
+                        version=args.version,
+                        inputs={
+                            "dry_run": False,
+                            "registry": str(config.code.registry),
+                            "version": args.version,
+                        },
+                        input_manifest=str(config.code.registry),
+                        lock_keys=(f"library:{name}",),
+                        output_manifest=sync_output_manifest,
+                    )
+                sync_results.append(result)
             _emit({"results": sync_results})
             return (
                 0 if all(item["status"] in {"success", "planned"} for item in sync_results) else 1
@@ -224,13 +317,46 @@ def run_hub_command(args: argparse.Namespace) -> int:
                 rag_config = rag_config.with_overrides(qdrant_collection=args.candidate_collection)
             build_service = CodeBuildService(registry, config.code.data_root, rag_config)
             try:
-                build_result = build_service.build(
-                    args.library,
-                    version=args.version,
-                    limit=args.limit,
-                    dry_run=args.dry_run,
-                    prune=args.prune,
-                )
+                def build_operation() -> dict[str, Any]:
+                    return build_service.build(
+                        args.library,
+                        version=args.version,
+                        limit=args.limit,
+                        dry_run=False,
+                        prune=args.prune,
+                    )
+
+                if args.dry_run:
+                    build_result = build_service.build(
+                        args.library,
+                        version=args.version,
+                        limit=args.limit,
+                        dry_run=True,
+                        prune=args.prune,
+                    )
+                else:
+                    build_result = _task_executor().execute(
+                        "code_build",
+                        build_operation,
+                        knowledge_base="code",
+                        library=args.library,
+                        version=args.version,
+                        inputs={
+                            "candidate_collection": args.candidate_collection,
+                            "incremental": args.incremental,
+                            "limit": args.limit,
+                            "prune": args.prune,
+                        },
+                        input_manifest=str(config.code.registry),
+                        lock_keys=(
+                            f"library:{args.library}",
+                            f"index:code:{rag_config.qdrant_collection}",
+                        ),
+                        output_manifest=lambda result: str(
+                            result.get("normalized_manifest") or ""
+                        )
+                        or None,
+                    )
             finally:
                 build_service.close()
             _emit(build_result)
@@ -244,13 +370,54 @@ def run_hub_command(args: argparse.Namespace) -> int:
                 minimum_quality=config.writing.minimum_quality,
             )
             try:
-                writing_result = writing_service.derive(
-                    paper_id=args.paper_id,
-                    collection=args.collection,
-                    limit=None if args.all else (args.limit or config.writing.default_limit),
-                    dry_run=args.dry_run,
-                    prune=args.prune,
+                selected_limit = (
+                    None if args.all else (args.limit or config.writing.default_limit)
                 )
+                def writing_operation() -> dict[str, Any]:
+                    return writing_service.derive(
+                        paper_id=args.paper_id,
+                        collection=args.collection,
+                        limit=selected_limit,
+                        dry_run=False,
+                        prune=args.prune,
+                    )
+
+                if args.dry_run:
+                    writing_result = writing_service.derive(
+                        paper_id=args.paper_id,
+                        collection=args.collection,
+                        limit=selected_limit,
+                        dry_run=True,
+                        prune=args.prune,
+                    )
+                else:
+                    writing_collection = config.rag_config("writing").qdrant_collection
+                    writing_result = _task_executor().execute(
+                        "writing_derive",
+                        writing_operation,
+                        knowledge_base="writing",
+                        inputs={
+                            "all": args.all,
+                            "collection": args.collection,
+                            "limit": selected_limit,
+                            "paper_id": args.paper_id,
+                            "processor_version": config.writing.processor_version,
+                            "prune": args.prune,
+                        },
+                        input_manifest=str(
+                            config.writing.literature_data_dir
+                            / "state"
+                            / "pipeline.sqlite3"
+                        ),
+                        lock_keys=(
+                            "derive:writing",
+                            f"index:writing:{writing_collection}",
+                        ),
+                        output_manifest=lambda result: str(
+                            result.get("derived_manifest") or ""
+                        )
+                        or None,
+                    )
             finally:
                 writing_service.close()
             _emit(writing_result)
@@ -331,3 +498,15 @@ def run_hub_command(args: argparse.Namespace) -> int:
 
 def _emit(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str))
+
+
+def _task_executor() -> TaskExecutor:
+    return TaskExecutor(TaskStore(default_task_store_path()))
+
+
+def _version_import_output(result: Mapping[str, Any]) -> str | None:
+    build = result.get("build")
+    if isinstance(build, Mapping) and build.get("normalized_manifest"):
+        return str(build["normalized_manifest"])
+    marker = result.get("marker")
+    return str(marker) if marker else None
