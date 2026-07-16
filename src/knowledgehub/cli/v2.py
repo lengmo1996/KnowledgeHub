@@ -17,6 +17,7 @@ from knowledgehub.evaluation.runner import (
     load_thresholds,
     write_report,
 )
+from knowledgehub.governance.maintenance import CleanupService
 from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexSnapshotManager
 from knowledgehub.governance.tasks import TaskStore
 from knowledgehub.governance.validation import HubValidator
@@ -33,6 +34,29 @@ from knowledgehub.writing_rag.v2 import (
 
 
 def add_v2_parsers(subparsers: Any) -> None:
+    clean = subparsers.add_parser("clean", help="Plan or execute bounded runtime cleanup")
+    clean_commands = clean.add_subparsers(dest="clean_command", required=True)
+    clean_cache = clean_commands.add_parser("cache")
+    clean_cache.add_argument("--min-age-hours", type=int, default=24)
+    clean_source = clean_commands.add_parser("source")
+    clean_source.add_argument("--library", required=True)
+    clean_source.add_argument("--version", required=True)
+    clean_snapshots = clean_commands.add_parser("snapshots")
+    clean_snapshots.add_argument("knowledge_base", choices=("code", "writing"))
+    clean_snapshots.add_argument("--keep", type=int, default=3)
+    for parser in (clean_cache, clean_source, clean_snapshots):
+        parser.add_argument("--execute", action="store_true")
+        parser.add_argument("--yes", action="store_true")
+
+    prune = subparsers.add_parser("prune", help="Plan or remove unreferenced artifacts")
+    prune_commands = prune.add_subparsers(dest="prune_command", required=True)
+    unreferenced = prune_commands.add_parser("unreferenced")
+    unreferenced.add_argument(
+        "--knowledge-base", choices=("code", "writing", "all"), default="all"
+    )
+    unreferenced.add_argument("--execute", action="store_true")
+    unreferenced.add_argument("--yes", action="store_true")
+
     evaluation = subparsers.add_parser(
         "evaluate", help="Run grouped evaluation or compare regression reports"
     )
@@ -194,6 +218,45 @@ def add_v2_parsers(subparsers: Any) -> None:
 
 def run_v2_command(args: argparse.Namespace) -> int:
     config = HubConfig.load(args.hub_config or "configs/knowledgehub.yaml")
+    if args.source in {"clean", "prune"}:
+        service = CleanupService(
+            code_root=config.code.data_root,
+            rag_dirs={
+                "code": config.knowledge_bases["code"].data_dir,
+                "writing": config.knowledge_bases["writing"].data_dir,
+            },
+            index_root=Path("/data/KnowledgeHub/indexes"),
+        )
+        qdrant_client = None
+        if args.source == "clean" and args.clean_command == "cache":
+            plan = service.plan_cache(min_age_hours=args.min_age_hours)
+        elif args.source == "clean" and args.clean_command == "source":
+            plan = service.plan_source(args.library, args.version)
+        elif args.source == "clean":
+            plan = service.plan_snapshots(args.knowledge_base, keep=args.keep)
+            if args.execute:
+                from qdrant_client import QdrantClient
+
+                qdrant_client = QdrantClient(
+                    url=config.rag_config(args.knowledge_base).qdrant_url
+                )
+        else:
+            names = (
+                ("code", "writing")
+                if args.knowledge_base == "all"
+                else (args.knowledge_base,)
+            )
+            plan = service.plan_unreferenced(names)
+        try:
+            result = (
+                service.execute(plan, confirmed=args.yes, qdrant_client=qdrant_client)
+                if args.execute
+                else plan
+            )
+        finally:
+            if qdrant_client is not None:
+                qdrant_client.close()
+        return _emit(result)
     if args.source == "evaluate":
         if args.evaluation_command == "run":
             query = live_query_callback(config) if args.mode == "live" else None

@@ -48,7 +48,14 @@ class SchemaRegistry:
         if version != self.versions[name]:
             raise ValueError(f"incompatible {name} schema version: {version or 'missing'}")
         if not isinstance(data, Mapping):
-            raise ValueError("schema envelope data must be an object")
+            if name == "query_result":
+                data = {
+                    key: item
+                    for key, item in value.items()
+                    if key not in {"schema_name", "schema_version"}
+                }
+            else:
+                raise ValueError("schema envelope data must be an object")
         self._validate_required(name, data)
         return SchemaEnvelope(name, version, data)
 

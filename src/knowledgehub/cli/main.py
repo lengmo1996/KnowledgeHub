@@ -51,6 +51,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "repository",
         "writing-v2",
         "evaluate",
+        "clean",
+        "prune",
     }:
         return run_v2_command(args)
     parser.error(f"Unsupported source: {args.source}")

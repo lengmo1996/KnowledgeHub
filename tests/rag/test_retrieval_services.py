@@ -17,7 +17,7 @@ from knowledgehub.services.reranker_api import (
 from knowledgehub.services.reranker_api import (
     create_app as create_reranker_app,
 )
-from knowledgehub.services.search_api import create_app
+from knowledgehub.services.search_api import KnowledgeQueryBody, create_app
 
 
 class Pool:
@@ -110,6 +110,43 @@ def test_search_api_requires_bearer_key(tmp_path) -> None:
         authorize(None)
     assert failure.value.status_code == 401
     assert authorize("Bearer secret") is None
+
+
+def test_http_knowledge_query_returns_unified_evidence(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from knowledgehub.hub.evidence import KnowledgeQueryService
+
+    config = RagConfig(
+        data_dir=tmp_path,
+        gpu_mode="cpu",
+        embedding_dim=2,
+        search_api_key=SecretValue("secret"),
+    )
+    app = create_app(config)
+    monkeypatch.setattr(
+        KnowledgeQueryService,
+        "query",
+        lambda self, request, budget: {
+            "answer_context": [],
+            "sources": [],
+            "versions": [],
+            "symbols": [],
+            "confidence": 0.0,
+            "inferences": [],
+            "warnings": ["test"],
+            "budget": {"max_tokens": budget.max_tokens},
+        },
+    )
+    route = next(value for value in app.routes if getattr(value, "path", "") == "/knowledge/query")
+    result = route.endpoint(
+        KnowledgeQueryBody(
+            knowledge_base="writing",
+            query="gap",
+            max_tokens=256,
+        ),
+        None,
+    )
+    assert result["budget"]["max_tokens"] == 256
+    assert result["warnings"] == ["test"]
 
 
 def test_reranker_reduces_oom_batch_to_one() -> None:

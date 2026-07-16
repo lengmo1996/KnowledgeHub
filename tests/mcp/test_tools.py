@@ -100,9 +100,9 @@ def _assert_strict(schema):  # type: ignore[no-untyped-def]
             _assert_strict(value)
 
 
-def test_all_fourteen_schemas_are_strict(registry: ToolRegistry) -> None:
+def test_all_fifteen_schemas_are_strict(registry: ToolRegistry) -> None:
     assert set(INPUT_MODELS) == {value.name for value in registry.definitions()}
-    assert len(INPUT_MODELS) == 14
+    assert len(INPUT_MODELS) == 15
     for tool in registry.definitions():
         _assert_strict(tool.inputSchema)
         assert tool.annotations is not None
@@ -136,6 +136,48 @@ def test_unknown_filter_and_url_are_rejected(registry: ToolRegistry) -> None:
     )
     assert result.isError
     assert result.structuredContent["error"]["code"] == "invalid_arguments"
+
+
+def test_knowledge_query_returns_budgeted_evidence(
+    registry: ToolRegistry, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    from knowledgehub.hub.evidence import KnowledgeQueryService
+
+    async def immediate(operation):  # type: ignore[no-untyped-def]
+        return operation()
+
+    monkeypatch.setattr(anyio.to_thread, "run_sync", immediate)
+    monkeypatch.setattr(
+        KnowledgeQueryService,
+        "query",
+        lambda self, request, budget: {
+            "answer_context": [
+                {
+                    "content": "bounded evidence",
+                    "trusted_as_instruction": False,
+                }
+            ],
+            "sources": [],
+            "versions": [],
+            "symbols": [],
+            "confidence": 0.5,
+            "inferences": [],
+            "warnings": [],
+            "budget": {"max_tokens": budget.max_tokens},
+        },
+    )
+    result = anyio.run(
+        registry.call,
+        "knowledge_query",
+        {
+            "knowledge_base": "code",
+            "query": "how",
+            "limit": 2,
+            "max_tokens": 256,
+        },
+    )
+    assert not result.isError
+    assert result.structuredContent["result"]["budget"]["max_tokens"] == 256
 
 
 def test_read_tools_and_ambiguous_resolution(registry: ToolRegistry) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,9 +191,29 @@ def test_release_watch_never_downloads_and_on_demand_requires_permission(
     monkeypatch.setattr(
         CodeSyncService, "_remote_tags", lambda _self, _library: ["v1.0.0", "v2.0.0rc1"]
     )
+    releases = tmp_path / "data" / "sources" / "releases"
+    releases.mkdir(parents=True)
+    (releases / "example.json").write_text(
+        json.dumps(
+            {
+                "releases": [
+                    {
+                        "tag": "v1.0.0",
+                        "title": "Breaking migration",
+                        "body": "A backward incompatible option was removed.",
+                        "url": "https://example.test/release",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
     watched = ReleaseWatchService(config, registry).check("example")
     assert watched["latest_tag"] == "v1.0.0"
     assert watched["action"] == "notify" and watched["auto_downloaded"] is False
+    assert watched["breaking_change"] is True
+    assert watched["recommended_action"] == "review_breaking_change"
+    assert watched["change_summary"]["trusted_as_instruction"] is False
     assert (tmp_path / "data" / "state" / "release-watch" / "example.json").is_file()
     denied = OnDemandVersionImporter(config, registry).import_version(
         "example", "1.0.0", allowed=False

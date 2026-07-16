@@ -21,3 +21,14 @@ knowledgehub index rollback code <snapshot-id> --yes
 
 Test recovery on a non-production collection before relying on a server-level
 snapshot path in a deployment with a different Qdrant storage layout.
+
+V2 Integration adds `knowledge_query` and `/knowledge/query` without changing
+the raw `/search` or `rag_search` response. Existing Skills may migrate
+incrementally. Prefer the evidence envelope when the caller needs a bounded,
+source-labelled context; keep raw search only for clients that already perform
+their own evidence normalization.
+
+`query_result@2.0` is the only externally flattened V2 schema: required evidence
+fields remain at the response top level so Skills do not need to unwrap `data`.
+`SchemaRegistry` validates this explicit form and normalizes it to an internal
+`SchemaEnvelope`; other V2 schemas still require the standard `data` object.

@@ -27,8 +27,36 @@ Diffusers, Accelerate and Lightning; synchronization remains an explicit CLI
 operation and never runs all five on a timer.
 
 `sync releases` reads official Git tags, records the latest stable tag and emits
-`notify` state without downloading it. `sync version` requires
+`notify` state without downloading it. When cached official release metadata is
+available, Release Watch adds a bounded untrusted summary, conservative
+breaking-change signal, installed-version neighborhood and recommended review
+action. It never switches the environment or index. `sync version` requires
 `--allow-download` before a missing version is fetched and bounded-built.
+
+Synchronization scheduling remains separate from synchronization execution:
+
+```bash
+knowledgehub sync plan --trigger periodic --library transformers --interval-hours 24
+knowledgehub sync plan --trigger release --library diffusers
+knowledgehub sync plan --trigger config_change --library lightning
+```
+
+These commands create plans only: `scheduler_started=false`, downloads are
+disabled and alias/environment switches are forbidden. An external operator may
+use a reviewed plan to configure a scheduler later.
+
+Runtime cleanup is explicit and dry-run by default:
+
+```bash
+knowledgehub clean cache
+knowledgehub clean source --library transformers --version 5.13.1
+knowledgehub clean snapshots code --keep 3
+knowledgehub prune unreferenced --knowledge-base all
+```
+
+Execution additionally requires both `--execute --yes`. Cleanup protects the
+current source marker, keeps at least one snapshot, never accepts Literature as
+a target and writes an audit manifest after execution.
 
 ## Compliance and secrets
 

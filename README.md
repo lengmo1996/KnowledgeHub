@@ -89,6 +89,11 @@ knowledgehub writing-v2 task strengthen_argument "make evidence explicit" \
   --text "The method is better." --section Experiment
 knowledgehub evaluate run --mode offline --profile v2 --output /tmp/eval-v2.json
 knowledgehub evaluate run --mode live --profile v2 --output /tmp/eval-live-v2.json
+knowledgehub query code "How is a pretrained model loaded?" \
+  --library transformers --version 5.13.1 --evidence-envelope --max-tokens 2000
+knowledgehub sync plan --trigger periodic --library transformers --interval-hours 24
+knowledgehub clean source --library transformers --version 5.13.1
+knowledgehub prune unreferenced --knowledge-base all
 knowledgehub sync releases --all --dry-run
 knowledgehub sync version --library diffusers --version 0.37.0 --dry-run
 ```

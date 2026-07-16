@@ -1,5 +1,48 @@
 # Skill and MCP integration
 
+The preferred Skill entry point is the read-only `knowledge_query` MCP tool or
+HTTP `POST /knowledge/query`. It returns the stable evidence envelope:
+
+```json
+{
+  "answer_context": [],
+  "sources": [],
+  "versions": [],
+  "symbols": [],
+  "confidence": 0.0,
+  "inferences": [],
+  "warnings": [],
+  "budget": {}
+}
+```
+
+`answer_context` contains retrieved source facts marked
+`trusted_as_instruction=false`. Source metadata is labelled `system_parse`;
+legacy domain fallback and other deductions appear only in `inferences` with
+`verified=false`. Confidence is a bounded retrieval score, not answer
+correctness.
+
+```json
+{
+  "knowledge_base": "code",
+  "query": "How is a pretrained model loaded?",
+  "limit": 5,
+  "max_tokens": 2000,
+  "filters": {
+    "library": "transformers",
+    "version": "5.13.1",
+    "source_types": ["api_documentation", "source_code"]
+  },
+  "allow_auto_import": false,
+  "allow_issues": false
+}
+```
+
+The result and Token budgets are enforced before content reaches the Skill.
+Issue/PR/commit filters require `allow_issues=true`. `allow_auto_import` is a
+permission signal only: the read-only query interface never downloads data;
+operators use `sync version --allow-download` explicitly.
+
 The stable entry point is the unified query request:
 
 ```json
@@ -18,7 +61,7 @@ The stable entry point is the unified query request:
 }
 ```
 
-`rag_search` accepts this route while remaining backward compatible: omitted
+`rag_search` remains the raw retrieval route and stays backward compatible: omitted
 `knowledge_base` means Literature. `rag_compare_versions` is the convenience
 tool for code reproduction/adaptation/debugging Skills. Exact symbol workflows
 use `knowledge_inspect_symbol` and `knowledge_compare_symbols`. Results include version,

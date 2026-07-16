@@ -80,6 +80,12 @@ class SearchInput(StrictModel):
         return self
 
 
+class KnowledgeQueryInput(SearchInput):
+    max_tokens: int = Field(default=4000, ge=128, le=32000)
+    allow_auto_import: bool = False
+    allow_issues: bool = False
+
+
 class GetChunkInput(StrictModel):
     chunk_id: str = Field(min_length=1, max_length=256)
     max_chars: int = Field(default=20000, ge=256, le=120000)
@@ -214,6 +220,7 @@ class SubmitFeedbackInput(StrictModel):
 
 INPUT_MODELS: dict[str, type[StrictModel]] = {
     "rag_search": SearchInput,
+    "knowledge_query": KnowledgeQueryInput,
     "rag_get_chunk": GetChunkInput,
     "rag_get_document": GetDocumentInput,
     "rag_get_neighbors": GetNeighborsInput,

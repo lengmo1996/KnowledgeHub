@@ -90,6 +90,7 @@ _PAYLOAD_FIELDS = {
 
 TOOL_DESCRIPTIONS = {
     "rag_search": "Search indexed document chunks with dense, sparse, or Qdrant RRF hybrid retrieval.",
+    "knowledge_query": "Return a budgeted cross-knowledge-base evidence envelope with sources, versions, symbols, inferences and warnings.",
     "rag_get_chunk": "Read one already-indexed chunk by its known chunk ID.",
     "rag_get_document": "Read document metadata and a paginated chunk index; full text is excluded.",
     "rag_get_neighbors": "Read bounded neighboring chunks around a known chunk ID.",
@@ -131,6 +132,7 @@ class ToolRegistry:
         }
         self._handlers: dict[str, Callable[[Any], Awaitable[dict[str, Any]]]] = {
             "rag_search": self._search,
+            "knowledge_query": self._knowledge_query,
             "rag_get_chunk": self._get_chunk,
             "rag_get_document": self._get_document,
             "rag_get_neighbors": self._get_neighbors,
@@ -288,6 +290,49 @@ class ToolRegistry:
             hit["payload"] = _mark_content(dict(hit["payload"]), value.max_chars_per_hit, warnings)
         raw["warnings"] = sorted(set(warnings))
         return {"ok": True, "result": raw}
+
+    async def _knowledge_query(self, value: Any) -> dict[str, Any]:
+        if value.neighbors.before or value.neighbors.after:
+            raise ToolError(
+                "unsupported_expansion",
+                "Knowledge evidence envelopes do not include neighbor expansion.",
+            )
+        from knowledgehub.hub.config import HubConfig
+        from knowledgehub.hub.evidence import KnowledgeQueryService, QueryBudget
+        from knowledgehub.hub.query import HubQueryRequest
+
+        filters = value.filters.model_dump(exclude_none=True)
+        if value.knowledge_base != "literature" and filters.get("source") == "zotero":
+            filters.pop("source", None)
+        config = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+        result = await anyio.to_thread.run_sync(
+            lambda: KnowledgeQueryService(config).query(
+                HubQueryRequest(
+                    knowledge_base=value.knowledge_base,
+                    query=value.query,
+                    intent=value.intent,
+                    filters=filters,
+                    top_k=value.limit,
+                    prefetch_limit=value.prefetch_limit,
+                    mode=value.mode,
+                    return_mode=value.return_mode,
+                    reranker=value.reranker if value.reranker != "auto" else "off",
+                ),
+                QueryBudget(
+                    max_results=value.limit,
+                    max_tokens=value.max_tokens,
+                    allow_auto_import=value.allow_auto_import,
+                    allow_issues=value.allow_issues,
+                ),
+            )
+        )
+        warnings = list(result["warnings"])
+        for context in result["answer_context"]:
+            content = str(context.get("content") or "")
+            if _INJECTION.search(content):
+                warnings.append("possible_prompt_injection_in_retrieved_content")
+        result["warnings"] = sorted(set(warnings))
+        return {"ok": True, "result": result}
 
     async def _compare_versions(self, value: Any) -> dict[str, Any]:
         search = SearchInput(

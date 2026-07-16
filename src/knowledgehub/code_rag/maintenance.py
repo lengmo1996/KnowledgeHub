@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -90,7 +91,33 @@ class ReleaseWatchService:
         state_path = self.config.code.data_root / "state" / "release-watch" / f"{library_name}.json"
         previous = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
         changed = bool(latest_tag and latest_tag != previous.get("latest_tag"))
-        relevant = library.installed_version() is not None
+        installed = library.installed_version()
+        relevant = installed is not None
+        release = self._release_record(library_name, latest_tag)
+        release_text = " ".join(
+            str(release.get(key) or "") for key in ("title", "body")
+        )
+        breaking = (
+            True
+            if re.search(
+                r"\b(?:breaking|backward incompatible|removed|migration required)\b",
+                release_text,
+                re.I,
+            )
+            else False if release else "unknown"
+        )
+        ordered_versions = [value for value, _tag in stable]
+        installed_value = version_from_tag(installed or "")
+        lower = (
+            [str(value) for value in ordered_versions if installed_value and value < installed_value]
+            if installed_value
+            else []
+        )
+        higher = (
+            [str(value) for value in ordered_versions if installed_value and value > installed_value]
+            if installed_value
+            else []
+        )
         result = {
             "schema_name": "release_watch",
             "schema_version": "2.0",
@@ -100,11 +127,46 @@ class ReleaseWatchService:
             "previous_tag": previous.get("latest_tag"),
             "new_release": changed,
             "environment_relevant": relevant,
-            "breaking_change": "unknown",
+            "installed_version": installed,
+            "breaking_change": breaking,
+            "change_summary": {
+                "title": release.get("title"),
+                "excerpt": str(release.get("body") or "")[:500],
+                "source_url": release.get("url"),
+                "trusted_as_instruction": False,
+            } if release else None,
+            "version_neighborhood": {
+                "previous_stable": lower[-1] if lower else None,
+                "next_stable": higher[0] if higher else None,
+                "latest_stable": str(latest_version) if latest_version else None,
+            },
             "action": "notify" if changed else "none",
+            "recommended_action": (
+                "review_breaking_change"
+                if changed and breaking is True
+                else "review_and_import_on_demand" if changed else "none"
+            ),
+            "download_decision": "requires_explicit_permission",
             "auto_downloaded": False,
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }
         if not dry_run:
             atomic_write_json(state_path, result)
         return result
+
+    def _release_record(self, library: str, tag: str | None) -> dict[str, Any]:
+        path = self.config.code.data_root / "sources" / "releases" / f"{library}.json"
+        if not tag or not path.is_file():
+            return {}
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return next(
+            (
+                dict(item)
+                for item in value.get("releases") or []
+                if item.get("tag") == tag
+            ),
+            {},
+        )

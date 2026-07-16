@@ -13,6 +13,7 @@ from knowledgehub.code_rag.environment import EnvironmentCapture
 from knowledgehub.code_rag.maintenance import OnDemandVersionImporter, ReleaseWatchService
 from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
+from knowledgehub.governance.maintenance import SyncPlanner
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.hub.query import (
     HubQueryRequest,
@@ -53,6 +54,16 @@ def add_hub_parsers(subparsers: Any) -> None:
     sync_version.add_argument("--allow-download", action="store_true")
     sync_version.add_argument("--build-limit", type=int, default=20)
     sync_version.add_argument("--dry-run", action="store_true")
+    sync_plan = sync_commands.add_parser("plan")
+    sync_plan.add_argument(
+        "--trigger",
+        choices=("manual", "periodic", "release", "config_change", "on_demand"),
+        required=True,
+    )
+    sync_plan.add_argument("--library", action="append", dest="libraries", default=[])
+    sync_plan.add_argument("--version")
+    sync_plan.add_argument("--interval-hours", type=int)
+    sync_plan.add_argument("--output", type=Path)
 
     build = subparsers.add_parser("build", help="Build a derived knowledge index")
     build_commands = build.add_subparsers(dest="build_domain", required=True)
@@ -109,6 +120,8 @@ def add_hub_parsers(subparsers: Any) -> None:
     query.add_argument("--explain-plan", action="store_true")
     query.add_argument("--allow-auto-import", action="store_true")
     query.add_argument("--allow-issues", action="store_true")
+    query.add_argument("--evidence-envelope", action="store_true")
+    query.add_argument("--max-tokens", type=int, default=4000)
 
 
 def run_hub_command(args: argparse.Namespace) -> int:
@@ -145,6 +158,20 @@ def run_hub_command(args: argparse.Namespace) -> int:
             _emit(result)
             return 0
         if args.source == "sync":
+            if args.sync_domain == "plan":
+                from knowledgehub.core.atomic import atomic_write_json
+
+                result = SyncPlanner(registry).plan(
+                    trigger=args.trigger,
+                    libraries=args.libraries,
+                    version=args.version,
+                    interval_hours=args.interval_hours,
+                )
+                if args.output:
+                    atomic_write_json(args.output, result)
+                    result["plan_path"] = str(args.output)
+                _emit(result)
+                return 0
             if args.sync_domain == "releases":
                 names = (
                     [item.name for item in registry.list(enabled_only=True)]
@@ -265,18 +292,32 @@ def run_hub_command(args: argparse.Namespace) -> int:
             if args.explain_plan:
                 _emit({"plan": plan})
                 return 0
-            search_result = HubQueryService(config).search(
-                HubQueryRequest(
-                    knowledge_base=args.knowledge_base,
-                    query=args.query,
-                    intent=args.intent,
-                    filters=filters,
-                    top_k=args.top_k,
-                    mode=args.mode,
-                    return_mode=args.return_mode,
-                    reranker=args.reranker,
-                )
+            request = HubQueryRequest(
+                knowledge_base=args.knowledge_base,
+                query=args.query,
+                intent=args.intent,
+                filters=filters,
+                top_k=args.top_k,
+                mode=args.mode,
+                return_mode=args.return_mode,
+                reranker=args.reranker,
             )
+            if args.evidence_envelope:
+                from knowledgehub.hub.evidence import KnowledgeQueryService, QueryBudget
+
+                _emit(
+                    KnowledgeQueryService(config).query(
+                        request,
+                        QueryBudget(
+                            max_results=args.top_k,
+                            max_tokens=args.max_tokens,
+                            allow_auto_import=args.allow_auto_import,
+                            allow_issues=args.allow_issues,
+                        ),
+                    )
+                )
+                return 0
+            search_result = HubQueryService(config).search(request)
             payload = dataclasses.asdict(search_result)
             if plan is not None:
                 payload["query_plan"] = plan

@@ -7,7 +7,7 @@ import dataclasses
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable, Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -46,6 +46,13 @@ class SearchBody(BaseModel):
     use_reranker: bool = False
     reranker_profile: str = "off"
     fallback_policy: str = "degrade"
+
+
+class KnowledgeQueryBody(SearchBody):
+    knowledge_base: Literal["literature", "code", "writing"] = "literature"
+    max_tokens: int = Field(default=4000, ge=128, le=32000)
+    allow_auto_import: bool = False
+    allow_issues: bool = False
 
 
 def build_retrieval(config: RagConfig) -> RetrievalService:
@@ -152,6 +159,49 @@ def create_app(
             **dataclasses.asdict(response),
             "hits": [dataclasses.asdict(value) for value in response.hits],
         }
+
+    @app.post("/knowledge/query")
+    def knowledge_query(
+        body: KnowledgeQueryBody, _: None = Depends(authorize)
+    ) -> dict[str, Any]:
+        from knowledgehub.hub.config import HubConfig
+        from knowledgehub.hub.evidence import KnowledgeQueryService, QueryBudget
+        from knowledgehub.hub.query import HubQueryRequest
+
+        filters = dict(body.filters)
+        for key, value in {
+            "collection_key": body.collection_key,
+            "tag": body.tag,
+            "year_from": body.year_from,
+            "year_to": body.year_to,
+            "doi": body.doi,
+            "document_id": body.document_id,
+            "attachment_key": body.attachment_key,
+        }.items():
+            if value is not None:
+                filters[key] = value
+        config_value = HubConfig.load(
+            os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml")
+        )
+        return KnowledgeQueryService(config_value).query(
+            HubQueryRequest(
+                knowledge_base=body.knowledge_base,
+                query=body.query,
+                intent=body.intent,
+                filters=filters,
+                top_k=body.limit,
+                prefetch_limit=body.prefetch_limit,
+                mode=body.mode,
+                return_mode=body.return_mode,
+                reranker=body.reranker_profile if body.use_reranker else "off",
+            ),
+            QueryBudget(
+                max_results=body.limit,
+                max_tokens=body.max_tokens,
+                allow_auto_import=body.allow_auto_import,
+                allow_issues=body.allow_issues,
+            ),
+        )
 
     return app
 
