@@ -57,7 +57,10 @@ See [Code RAG](docs/code_rag.md), [Writing RAG](docs/writing_rag.md),
 
 V3 validates the project Workspace and experiment-knowledge loop with the isolated
 `fixture-vision-project`. The real-project Pilot is intentionally deferred until a suitable
-research repository exists. When one is available, follow the gated, read-only procedure in
+research repository exists. Use the
+[controlled Pilot and data-driven maintenance guide](docs/guides/CONTROLLED_PILOT_DATA_DRIVEN_MAINTENANCE.zh-CN.md)
+to prepare a private project, establish the four-week operating baseline and collect evidence.
+When the project is ready, follow the gated, read-only procedure in
 [the Chinese real-project Pilot guide](docs/guides/REAL_PROJECT_PILOT.zh-CN.md); do not point a
 real repository at `state/fixtures` or the fixture-only project router.
 
