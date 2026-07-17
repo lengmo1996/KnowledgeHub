@@ -45,10 +45,15 @@ class QdrantIndex:
     async def aclose(self) -> None:
         await self.async_client.close()
 
-    def ensure_collection(self) -> None:
+    def ensure_collection(self, *, require_new: bool = False) -> None:
         from qdrant_client import models
 
-        if not self.client.collection_exists(self.collection):
+        exists = self.client.collection_exists(self.collection)
+        if require_new and exists:
+            raise QdrantSchemaError(
+                f"candidate collection already exists; choose a new name: {self.collection}"
+            )
+        if not exists:
             self.client.create_collection(
                 collection_name=self.collection,
                 vectors_config={

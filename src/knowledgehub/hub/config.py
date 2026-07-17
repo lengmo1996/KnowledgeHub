@@ -108,11 +108,27 @@ class HubConfig:
             raise RagConfigError(f"unknown knowledge base: {knowledge_base}") from exc
         collection = selected.collection
         index_root = Path(os.environ.get("KH_INDEX_ROOT", "/data/KnowledgeHub/indexes"))
-        from knowledgehub.governance.snapshots import active_collection
+        from knowledgehub.governance.snapshots import (
+            active_collection,
+            active_release_data_dir,
+        )
 
         collection = active_collection(index_root, knowledge_base, collection)
+        data_dir = active_release_data_dir(index_root, knowledge_base, selected.data_dir)
         return RagConfig.load(self.base_rag_config).with_overrides(
-            data_dir=selected.data_dir,
+            data_dir=data_dir,
             qdrant_collection=collection,
             embedding_query_instruction=selected.query_instruction,
+        )
+
+    def normalized_root(self, knowledge_base: str) -> Path:
+        if knowledge_base != "code":
+            raise RagConfigError("normalized release roots are implemented only for code")
+        index_root = Path(os.environ.get("KH_INDEX_ROOT", "/data/KnowledgeHub/indexes"))
+        from knowledgehub.governance.snapshots import active_release_normalized_root
+
+        return active_release_normalized_root(
+            index_root,
+            knowledge_base,
+            self.code.data_root / "normalized",
         )

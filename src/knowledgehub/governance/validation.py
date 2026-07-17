@@ -17,10 +17,12 @@ class HubValidator:
         writing_root: Path,
         *,
         rag_dirs: Mapping[str, Path] | None = None,
+        code_normalized_root: Path | None = None,
     ) -> None:
         self.code_root = code_root
         self.writing_root = writing_root
         self.rag_dirs = dict(rag_dirs or {})
+        self.code_normalized_root = code_normalized_root or code_root / "normalized"
 
     def sources(self) -> dict[str, Any]:
         errors: list[str] = []
@@ -41,9 +43,9 @@ class HubValidator:
         duplicates: set[str] = set()
         seen: set[str] = set()
         checked = 0
-        for manifest in self.code_root.glob("normalized/**/*.jsonl"):
+        for manifest in self.code_normalized_root.glob("**/*.jsonl"):
             if (
-                manifest.parent == self.code_root / "normalized"
+                manifest.parent == self.code_normalized_root
                 and (manifest.parent / manifest.stem).is_dir()
             ):
                 # V1 wrote one library-level manifest. V2 version-scoped
@@ -331,10 +333,10 @@ class HubValidator:
     ) -> dict[str, dict[str, Any]]:
         records: dict[str, dict[str, Any]] = {}
         if knowledge_base == "code":
-            manifests = self.code_root.glob("normalized/**/*.jsonl")
+            manifests = self.code_normalized_root.glob("**/*.jsonl")
             for manifest in manifests:
                 if (
-                    manifest.parent == self.code_root / "normalized"
+                    manifest.parent == self.code_normalized_root
                     and (manifest.parent / manifest.stem).is_dir()
                 ):
                     continue

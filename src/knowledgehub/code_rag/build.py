@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import fnmatch
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,10 @@ from knowledgehub.code_rag.registry import CodeLibrary, CodeSourceRegistry
 from knowledgehub.core.atomic import atomic_write_jsonl
 from knowledgehub.core.hashing import sha256_file, sha256_text
 from knowledgehub.core.models import KnowledgeDocument
+from knowledgehub.governance.releases import (
+    CandidateReleaseLayout,
+    CandidateReleaseManager,
+)
 from knowledgehub.indexing.incremental import IncrementalChunkIndexer, IndexInput
 from knowledgehub.pipeline.config import RagConfig
 
@@ -31,12 +34,14 @@ class CodeBuildService:
         rag_config: RagConfig,
         *,
         indexer: IncrementalChunkIndexer | None = None,
+        candidate_release: CandidateReleaseLayout | None = None,
     ) -> None:
         self.registry = registry
         self.data_root = data_root
         self.rag_config = rag_config
         self.chunker = CodeChunker()
         self.indexer = indexer
+        self.candidate_release = candidate_release
 
     def close(self) -> None:
         if self.indexer is not None:
@@ -50,10 +55,11 @@ class CodeBuildService:
         limit: int | None = None,
         dry_run: bool = False,
         prune: bool = False,
-        normalized_namespace: str | None = None,
     ) -> dict[str, Any]:
         if prune and (version is not None or limit is not None):
             raise ValueError("prune requires a complete all-version Code build")
+        if not dry_run:
+            self._validate_candidate_release()
         library = self.registry.get(library_name)
         markers = self._markers(library, version)
         inputs: list[IndexInput] = []
@@ -96,27 +102,59 @@ class CodeBuildService:
             normalized.extend(
                 item.document.to_dict(include_content=False) for item in selected_releases
             )
-        normalized_root = self.data_root / "normalized"
-        if normalized_namespace:
-            namespace = re.sub(r"[^A-Za-z0-9_.-]+", "_", normalized_namespace).strip("._")
-            if not namespace:
-                raise ValueError("normalized namespace is empty after sanitization")
-            normalized_root = self.data_root / ".staging" / "normalized" / namespace
+        normalized_root = (
+            self.candidate_release.normalized_root
+            if self.candidate_release is not None
+            else self.data_root / "normalized"
+        )
         normalized_path = normalized_root / library.name / f"{version or 'all-versions'}.jsonl"
         if not dry_run:
             atomic_write_jsonl(normalized_path, normalized, sort_key=lambda item: item["document_id"])
-        indexer = self.indexer or IncrementalChunkIndexer(self.rag_config, initialize=not dry_run)
-        summary = indexer.build(inputs, knowledge_base="code", dry_run=dry_run, prune=prune)
+        if self.indexer is None:
+            self.indexer = IncrementalChunkIndexer(
+                self.rag_config,
+                initialize=not dry_run,
+                require_new_collection=not dry_run,
+            )
+        summary = self.indexer.build(
+            inputs,
+            knowledge_base="code",
+            dry_run=dry_run,
+            prune=prune,
+        )
         result = summary.to_dict()
         result.update(
             {
                 "library": library.name,
                 "versions": sorted({str(item.document.metadata.get("version")) for item in inputs}),
                 "normalized_manifest": str(normalized_path),
+                "candidate_release": (
+                    str(self.candidate_release.manifest_path)
+                    if self.candidate_release is not None
+                    else None
+                ),
                 "truncated_files": truncated_files,
             }
         )
         return result
+
+    def _validate_candidate_release(self) -> None:
+        release = self.candidate_release
+        if release is None:
+            raise RuntimeError(
+                "direct Code index writes are disabled; build into a prepared candidate release"
+            )
+        if self.rag_config.qdrant_collection != release.collection:
+            raise ValueError("candidate release collection differs from the RAG configuration")
+        if self.rag_config.data_dir.resolve(strict=False) != release.rag_data_dir.resolve(
+            strict=False
+        ):
+            raise ValueError("candidate release must use its isolated RAG data directory")
+        if not release.manifest_path.is_file():
+            raise ValueError("candidate release must be prepared before building")
+        manifest = CandidateReleaseManager.load(release)
+        if manifest.get("status") != "building":
+            raise ValueError("candidate release is immutable after its build is finalized")
 
     def _markers(self, library: CodeLibrary, version: str | None) -> list[Path]:
         root = self.data_root / "sources" / "repositories" / library.name

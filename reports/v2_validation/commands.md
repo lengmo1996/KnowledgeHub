@@ -47,6 +47,48 @@ knowledgehub index rollback code 20260716T172110-knowledgehub_code_qwen3_4b_1024
 knowledgehub validate all
 ```
 
+上面的 snapshot rollback 是初轮验收时执行的旧 Qdrant-only 契约。P1-1 修复后必须提供全新 target collection；legacy snapshot 还需显式 `--allow-qdrant-only`。
+
+## P1-1 修复后实机命令
+
+```bash
+knowledgehub build code --library transformers --version 5.13.1 --limit 1 \
+  --candidate-collection knowledgehub_code_atomic_validation_20260717_01 --dry-run
+knowledgehub build code --library transformers --version 5.13.1 --limit 1 \
+  --candidate-collection knowledgehub_code_atomic_validation_20260717_01
+knowledgehub index validate-candidate code knowledgehub_code_atomic_validation_20260717_01
+knowledgehub index alias-status code
+knowledgehub validate all
+pytest -q
+ruff check .
+mypy --strict src/knowledgehub
+```
+
+维护窗口实际执行：
+
+```bash
+# 此路径发现会扩大 active source scope，已安全中断并保留 failed candidate：
+knowledgehub build code --all \
+  --candidate-collection knowledgehub_code_release_20260717_maintenance_01
+
+# 等价复制当前完整 active release：
+knowledgehub index bootstrap-candidate code knowledgehub_code_release_20260717_maintenance_02
+knowledgehub index stage code knowledgehub_code_release_20260717_maintenance_02 \
+  --release-manifest /data/KnowledgeHub/code/releases/code/knowledgehub_code_release_20260717_maintenance_02/release.json
+knowledgehub index promote code --yes
+knowledgehub validate all
+knowledgehub query code "Where is PreTrainedModel.from_pretrained defined?" \
+  --library transformers --version 5.13.1 --symbol PreTrainedModel.from_pretrained \
+  --top-k 3 --evidence-envelope
+knowledgehub index snapshot code
+knowledgehub index rollback-alias code --yes
+knowledgehub validate all
+knowledgehub index rollback code \
+  20260716T192046-knowledgehub_code_release_20260717_maintenance_02-8688692131812382-2026-07-16-19-20-46.snapshot \
+  --target-collection knowledgehub_code_recovery_20260717_maintenance_03 --yes
+knowledgehub index validate-candidate code knowledgehub_code_recovery_20260717_maintenance_03
+```
+
 ## 仓库、Debug、MCP 与服务
 
 ```bash
@@ -61,4 +103,25 @@ docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml ps -a
 docker compose -f deploy/qdrant/compose.yaml -f deploy/gpu/compose.yaml build search-api
 ```
 
-Search API 0.2.5 容器切换命令因 `/etc/knowledgehub/rag.env` root 权限而未执行成功；管理员应运行仓库现有 systemd/compose 启动命令。
+Search API 0.2.5 容器已由管理员执行以下命令完成切换，容器状态为 healthy；三库鉴权 smoke 已于 10:16 通过：
+
+```bash
+sudo docker compose --env-file /etc/knowledgehub/rag.env \
+  -f deploy/gpu/compose.yaml --profile online-dual \
+  up -d --no-deps --force-recreate search-api
+```
+
+本轮 P2/P3 source 修复后已重建 image，并再次执行上面的 force-recreate：
+
+```bash
+sudo docker compose --env-file /etc/knowledgehub/rag.env \
+  -f deploy/gpu/compose.yaml --profile online-dual \
+  build search-api
+```
+
+editable metadata 对齐命令已执行，随后已重启两个 MCP listener：
+
+```bash
+/home/lengmo/anaconda3/envs/rag/bin/python -m pip install --no-deps -e .
+sudo systemctl restart knowledgehub-mcp-lan.service knowledgehub-mcp-tailscale.service
+```

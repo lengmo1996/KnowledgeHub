@@ -151,6 +151,7 @@ class IncrementalChunkIndexer:
         sparse_encoder: Any | None = None,
         index: Any | None = None,
         initialize: bool = True,
+        require_new_collection: bool = False,
     ) -> None:
         self.config = config
         self.data_dir = config.data_dir
@@ -158,6 +159,8 @@ class IncrementalChunkIndexer:
         self.endpoint_pool = endpoint_pool
         self.sparse_encoder = sparse_encoder
         self.index = index
+        self.require_new_collection = require_new_collection
+        self._collection_initialized = False
 
     def _components(self) -> tuple[Any, Any, Any]:
         if self.endpoint_pool is None:
@@ -235,7 +238,11 @@ class IncrementalChunkIndexer:
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         (self.data_dir / "chunks").mkdir(parents=True, exist_ok=True, mode=0o700)
         pool, sparse_encoder, index = self._components()
-        index.ensure_collection()
+        if self.require_new_collection and not self._collection_initialized:
+            index.ensure_collection(require_new=True)
+        else:
+            index.ensure_collection()
+        self._collection_initialized = True
         for value, metadata_hash in planned:
             try:
                 chunks = value.chunks

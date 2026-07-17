@@ -7,7 +7,6 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from knowledgehub.code_rag.build import CodeBuildService
 from knowledgehub.code_rag.registry import CodeSourceRegistry, version_from_tag
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.core.atomic import atomic_write_json
@@ -55,16 +54,15 @@ class OnDemandVersionImporter:
         ).sync(library, version=version, dry_run=dry_run)
         if dry_run:
             return {"status": "planned", "sync": sync, "build_limit": build_limit}
-        build_service = CodeBuildService(
-            self.registry, self.config.code.data_root, self.config.rag_config("code")
-        )
-        try:
-            build = build_service.build(
-                library, version=version.removeprefix("v"), limit=build_limit
-            )
-        finally:
-            build_service.close()
-        return {"status": "completed" if build["status"] == "success" else "partial", "sync": sync, "build": build}
+        return {
+            "status": "synced_requires_candidate_build",
+            "sync": sync,
+            "library": library,
+            "version": version.removeprefix("v"),
+            "recommended_build_limit": build_limit,
+            "build": None,
+            "warning": "direct production builds are disabled; create a new candidate release",
+        }
 
 
 class ReleaseWatchService:

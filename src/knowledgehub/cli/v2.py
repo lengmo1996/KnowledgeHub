@@ -19,6 +19,7 @@ from knowledgehub.evaluation.runner import (
 )
 from knowledgehub.governance.maintenance import CleanupService
 from knowledgehub.governance.release import validate_release_manifest
+from knowledgehub.governance.releases import CandidateReleaseManager
 from knowledgehub.governance.snapshots import CollectionPromotionManager, IndexSnapshotManager
 from knowledgehub.governance.tasks import TaskExecutor, TaskStore, default_task_store_path
 from knowledgehub.governance.validation import HubValidator
@@ -30,7 +31,7 @@ from knowledgehub.writing_rag.v2 import (
     WritingFeedbackStore,
     WritingProfileStore,
     WritingTaskPlanner,
-    similarity_risk,
+    embedding_similarity_risk,
 )
 
 
@@ -65,18 +66,14 @@ def add_v2_parsers(subparsers: Any) -> None:
     prune = subparsers.add_parser("prune", help="Plan or remove unreferenced artifacts")
     prune_commands = prune.add_subparsers(dest="prune_command", required=True)
     unreferenced = prune_commands.add_parser("unreferenced")
-    unreferenced.add_argument(
-        "--knowledge-base", choices=("code", "writing", "all"), default="all"
-    )
+    unreferenced.add_argument("--knowledge-base", choices=("code", "writing", "all"), default="all")
     unreferenced.add_argument("--execute", action="store_true")
     unreferenced.add_argument("--yes", action="store_true")
 
     evaluation = subparsers.add_parser(
         "evaluate", help="Run grouped evaluation or compare regression reports"
     )
-    evaluation_commands = evaluation.add_subparsers(
-        dest="evaluation_command", required=True
-    )
+    evaluation_commands = evaluation.add_subparsers(dest="evaluation_command", required=True)
     evaluation_run = evaluation_commands.add_parser("run")
     evaluation_run.add_argument("--domain", choices=("all", "code", "writing"), default="all")
     evaluation_run.add_argument("--mode", choices=("offline", "live"), default="offline")
@@ -101,16 +98,33 @@ def add_v2_parsers(subparsers: Any) -> None:
     rollback = commands.add_parser("rollback")
     rollback.add_argument("knowledge_base", choices=("literature", "code", "writing"))
     rollback.add_argument("snapshot_id")
+    rollback.add_argument("--target-collection", required=True)
+    rollback.add_argument("--allow-qdrant-only", action="store_true")
     rollback.add_argument("--yes", action="store_true")
+    validate_candidate = commands.add_parser(
+        "validate-candidate",
+        help="Validate an isolated candidate release against its physical collection",
+    )
+    validate_candidate.add_argument("knowledge_base", choices=("code",))
+    validate_candidate.add_argument("candidate_collection")
+    bootstrap_candidate = commands.add_parser(
+        "bootstrap-candidate",
+        help="Clone the complete active Code release into an isolated candidate",
+    )
+    bootstrap_candidate.add_argument("knowledge_base", choices=("code",))
+    bootstrap_candidate.add_argument("candidate_collection")
     stage = commands.add_parser("stage", help="Register a populated physical candidate")
     stage.add_argument("knowledge_base", choices=("literature", "code", "writing"))
     stage.add_argument("candidate_collection")
+    stage.add_argument("--release-manifest", type=Path, required=True)
     promote = commands.add_parser("promote", help="Atomically move the stable alias")
     promote.add_argument("knowledge_base", choices=("literature", "code", "writing"))
     promote.add_argument("--yes", action="store_true")
     alias_rollback = commands.add_parser("rollback-alias")
     alias_rollback.add_argument("knowledge_base", choices=("literature", "code", "writing"))
     alias_rollback.add_argument("--yes", action="store_true")
+    recover_promotion = commands.add_parser("recover-promotion")
+    recover_promotion.add_argument("knowledge_base", choices=("literature", "code", "writing"))
     alias_status = commands.add_parser("alias-status")
     alias_status.add_argument("knowledge_base", choices=("literature", "code", "writing"))
 
@@ -272,15 +286,9 @@ def run_v2_command(args: argparse.Namespace) -> int:
             if args.execute:
                 from qdrant_client import QdrantClient
 
-                qdrant_client = QdrantClient(
-                    url=config.rag_config(args.knowledge_base).qdrant_url
-                )
+                qdrant_client = QdrantClient(url=config.rag_config(args.knowledge_base).qdrant_url)
         else:
-            names = (
-                ("code", "writing")
-                if args.knowledge_base == "all"
-                else (args.knowledge_base,)
-            )
+            names = ("code", "writing") if args.knowledge_base == "all" else (args.knowledge_base,)
             plan = service.plan_unreferenced(names)
         try:
             result = (
@@ -328,19 +336,114 @@ def run_v2_command(args: argparse.Namespace) -> int:
         collection = config.knowledge_bases[args.knowledge_base].collection
         promotion = CollectionPromotionManager(Path("/data/KnowledgeHub/indexes"), manager.client)
         if args.index_command == "snapshot":
-            return _emit(manager.create(args.knowledge_base, collection))
+            alias_state = promotion.status(args.knowledge_base, collection)
+            current = alias_state.get("current") or {}
+            active = str(current.get("active_collection") or collection)
+            release_path = current.get("release_manifest")
+            return _emit(
+                manager.create(
+                    args.knowledge_base,
+                    active,
+                    release_manifest=Path(str(release_path)) if release_path else None,
+                )
+            )
         if args.index_command == "list-snapshots":
             return _emit({"snapshots": manager.list(args.knowledge_base)})
         if args.index_command == "rollback":
             return _emit(
-                manager.rollback(args.knowledge_base, args.snapshot_id, confirmed=args.yes)
+                manager.rollback(
+                    args.knowledge_base,
+                    args.snapshot_id,
+                    target_collection=args.target_collection,
+                    allow_qdrant_only=args.allow_qdrant_only,
+                    confirmed=args.yes,
+                )
             )
+        release_manager = CandidateReleaseManager(config.code.data_root / "releases")
+        if args.index_command == "bootstrap-candidate":
+            candidate = args.candidate_collection
+            active_state = promotion.status(args.knowledge_base, collection)
+            current = active_state.get("current") or {}
+            source_collection = str(current.get("active_collection") or collection)
+            source_rag = config.rag_config(args.knowledge_base).data_dir
+            source_normalized = config.normalized_root(args.knowledge_base)
+            identity = release_manager.normalized_identity(source_normalized)
+            layout = release_manager.prepare(
+                args.knowledge_base,
+                candidate,
+                build_scope={
+                    "mode": "active_release_clone",
+                    "source_collection": source_collection,
+                    "expected_documents": identity["count"],
+                    "source_document_fingerprint": identity["fingerprint"],
+                },
+                embedding={
+                    "model": config.rag_config(args.knowledge_base).embedding_model,
+                    "revision": config.rag_config(args.knowledge_base).embedding_revision,
+                    "dimension": config.rag_config(args.knowledge_base).embedding_dim,
+                    "sparse": config.rag_config(args.knowledge_base).sparse_model,
+                },
+                promotion_eligible=True,
+            )
+            try:
+                release_manager.copy_active_artifacts(
+                    layout,
+                    normalized_root=source_normalized,
+                    rag_data_dir=source_rag,
+                )
+                snapshot = manager.create(args.knowledge_base, source_collection)
+                recovery = manager.rollback(
+                    args.knowledge_base,
+                    snapshot["snapshot_id"],
+                    target_collection=candidate,
+                    allow_qdrant_only=True,
+                    confirmed=True,
+                )
+                build_result = {
+                    "status": "success",
+                    "selected": identity["count"],
+                    "indexed": identity["count"],
+                    "chunks": recovery["points"],
+                    "failures": [],
+                    "source_collection": source_collection,
+                    "snapshot_id": snapshot["snapshot_id"],
+                }
+                release_manager.record_build(layout, [build_result])
+                result = release_manager.validate(
+                    layout,
+                    qdrant_client=manager.client,
+                )
+            except BaseException as error:
+                release_manager.record_failure(layout, error)
+                raise
+            return _emit(result)
+        if args.index_command == "validate-candidate":
+            layout = release_manager.layout(
+                args.knowledge_base,
+                args.candidate_collection,
+            )
+            return _emit(release_manager.validate(layout, qdrant_client=manager.client))
         if args.index_command == "stage":
-            return _emit(promotion.stage(args.knowledge_base, args.candidate_collection))
+            release_manager.verify_validated(args.release_manifest)
+            layout = release_manager.layout(
+                args.knowledge_base,
+                args.candidate_collection,
+            )
+            release_manager.validate(layout, qdrant_client=manager.client)
+            verified = release_manager.verify_validated(args.release_manifest)
+            return _emit(
+                promotion.stage(
+                    args.knowledge_base,
+                    args.candidate_collection,
+                    verified_release=verified,
+                )
+            )
         if args.index_command == "promote":
             return _emit(promotion.promote(args.knowledge_base, collection, confirmed=args.yes))
         if args.index_command == "rollback-alias":
             return _emit(promotion.rollback(args.knowledge_base, confirmed=args.yes))
+        if args.index_command == "recover-promotion":
+            return _emit(promotion.recover_pending(args.knowledge_base, collection))
         return _emit(promotion.status(args.knowledge_base, collection))
     if args.source == "task":
         store = TaskStore(default_task_store_path())
@@ -365,9 +468,10 @@ def run_v2_command(args: argparse.Namespace) -> int:
             config.code.data_root,
             config.writing.data_root,
             rag_dirs={
-                "code": config.knowledge_bases["code"].data_dir,
-                "writing": config.knowledge_bases["writing"].data_dir,
+                "code": config.rag_config("code").data_dir,
+                "writing": config.rag_config("writing").data_dir,
             },
+            code_normalized_root=config.normalized_root("code"),
         )
         if args.target == "index" and args.knowledge_base is None:
             return _emit_error("knowledge_base is required for index validation")
@@ -393,9 +497,7 @@ def run_v2_command(args: argparse.Namespace) -> int:
                     indexes[name] = (client, rag_config.qdrant_collection)
             if args.target == "index":
                 knowledge_base = str(args.knowledge_base)
-                client, validation_collection = indexes.get(
-                    knowledge_base, (None, None)
-                )
+                client, validation_collection = indexes.get(knowledge_base, (None, None))
                 result = validator.index(
                     knowledge_base,
                     qdrant_client=client,
@@ -423,6 +525,7 @@ def run_v2_command(args: argparse.Namespace) -> int:
             )
             value = json.loads(marker.read_text(encoding="utf-8"))
             root = Path(value["source_path"])
+
             def symbol_operation() -> dict[str, Any]:
                 return {
                     "status": "success",
@@ -690,10 +793,16 @@ def run_v2_command(args: argparse.Namespace) -> int:
                 if line.strip()
             ]
             sources = [
-                {"source_id": item["writing_id"], "text": item["original_text"]}
-                for item in entries
+                {"source_id": item["writing_id"], "text": item["original_text"]} for item in entries
             ]
-            return _emit({"plan": plan, "similarity_audit": similarity_risk(args.text, sources)})
+            return _emit(
+                {
+                    "plan": plan,
+                    "similarity_audit": embedding_similarity_risk(
+                        args.text, sources, config.rag_config("writing")
+                    ),
+                }
+            )
         entries = [
             json.loads(line)
             for line in (config.writing.data_root / "derived" / "writing_entries.jsonl")
@@ -704,7 +813,7 @@ def run_v2_command(args: argparse.Namespace) -> int:
         sources = [
             {"source_id": item["writing_id"], "text": item["original_text"]} for item in entries
         ]
-        return _emit(similarity_risk(args.text, sources))
+        return _emit(embedding_similarity_risk(args.text, sources, config.rag_config("writing")))
     raise ValueError("unsupported V2 command")
 
 

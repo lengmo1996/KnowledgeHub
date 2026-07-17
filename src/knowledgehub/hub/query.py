@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping
 
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.retrieval.models import SearchHit, SearchRequest, SearchResponse
+from knowledgehub.writing_rag.sections import section_family
 
 _INTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("debug", re.compile(r"traceback|exception|error|报错|异常|崩溃", re.I)),
@@ -42,18 +43,38 @@ _SOURCE_PRIORITIES: Mapping[str, tuple[str, ...]] = {
 
 
 def _section_family(value: str) -> str:
-    lowered = value.lower()
-    if "intro" in lowered:
-        return "introduction"
-    if "related" in lowered or "background" in lowered:
-        return "related_work"
-    if "method" in lowered or "approach" in lowered:
-        return "method"
-    if any(item in lowered for item in ("experiment", "result", "analysis")):
-        return "experiment"
-    if "conclu" in lowered or "discussion" in lowered:
-        return "conclusion"
-    return re.sub(r"^\s*[\d.]+\s*", "", lowered).strip()
+    return section_family(value)
+
+
+_BIBLIOGRAPHY_QUERY = re.compile(
+    r"\b(?:bibliograph(?:y|ies)|citations?|references?|works cited)\b|参考文献|引用列表",
+    re.I,
+)
+_BIBLIOGRAPHY_HEADINGS = {
+    "bibliography",
+    "literature cited",
+    "reference",
+    "references",
+    "works cited",
+    "参考文献",
+    "参考资料",
+}
+
+
+def _is_bibliography(payload: Mapping[str, Any]) -> bool:
+    values: list[str] = []
+    for key in ("section", "section_path"):
+        raw = payload.get(key)
+        if isinstance(raw, (list, tuple)):
+            values.extend(str(item) for item in raw)
+        elif raw:
+            values.append(str(raw))
+    for value in values:
+        leaf = re.split(r"\s*(?:>|/|::)\s*", value)[-1]
+        normalized = re.sub(r"[^a-z\u3400-\u4dbf\u4e00-\u9fff]+", " ", leaf.lower()).strip()
+        if normalized in _BIBLIOGRAPHY_HEADINGS:
+            return True
+    return False
 
 
 def _normalized_domain(value: str) -> str:
@@ -62,8 +83,7 @@ def _normalized_domain(value: str) -> str:
 
 def _infer_writing_domains(payload: Mapping[str, Any]) -> set[str]:
     text = " ".join(
-        str(payload.get(key) or "")
-        for key in ("source_title", "title", "text", "source_excerpt")
+        str(payload.get(key) or "") for key in ("source_title", "title", "text", "source_excerpt")
     ).lower()
     inferred: set[str] = set()
     if re.search(r"\b(?:image|visual|vision|object detection|diffusion model)\b", text):
@@ -177,10 +197,15 @@ class HubQueryService:
             raise ValueError(f"unknown query filters: {', '.join(unknown)}")
         request = SearchRequest(
             query=value.query,
+            knowledge_base=value.knowledge_base,
             mode=value.mode,
             limit=(
                 max(value.prefetch_limit, value.top_k)
                 if writing_post_filters
+                or (
+                    value.knowledge_base == "literature"
+                    and not _BIBLIOGRAPHY_QUERY.search(value.query)
+                )
                 else value.top_k
             ),
             prefetch_limit=max(value.prefetch_limit, value.top_k),
@@ -199,7 +224,15 @@ class HubQueryService:
             if reranker is not None:
                 reranker.close()
         hits = list(response.hits)
-        if value.knowledge_base == "code":
+        if value.knowledge_base == "literature" and not _BIBLIOGRAPHY_QUERY.search(value.query):
+            demoted = [hit for hit in hits if _is_bibliography(hit.payload)]
+            if demoted:
+                hits = [hit for hit in hits if not _is_bibliography(hit.payload)] + demoted
+                response = dataclasses.replace(
+                    response,
+                    warnings=(*response.warnings, "bibliography_sections_demoted"),
+                )
+        elif value.knowledge_base == "code":
             exact_symbol = self._exact_symbol_hit(filters)
             if exact_symbol is not None:
                 hits.insert(0, exact_symbol)
@@ -255,15 +288,10 @@ class HubQueryService:
         exact = SymbolIndex(catalog_path, read_only=True).inspect(library, version, symbol)
         if exact is None:
             return None
-        marker_path = (
-            data_root
-            / "sources"
-            / "repositories"
-            / library
-            / version
-            / "current.json"
+        marker_path = data_root / "sources" / "repositories" / library / version / "current.json"
+        marker = (
+            json.loads(marker_path.read_text(encoding="utf-8")) if marker_path.is_file() else {}
         )
-        marker = json.loads(marker_path.read_text(encoding="utf-8")) if marker_path.is_file() else {}
         repository = str(marker.get("repository") or "")
         commit = str(marker.get("commit") or "")
         path = str(exact.get("path") or "")
@@ -312,9 +340,7 @@ class HubQueryService:
         return dataclasses.replace(hit, payload=payload)
 
     @staticmethod
-    def _writing_filter_match(
-        payload: Mapping[str, Any], filters: Mapping[str, Any]
-    ) -> bool:
+    def _writing_filter_match(payload: Mapping[str, Any], filters: Mapping[str, Any]) -> bool:
         section = filters.get("section")
         if section is not None:
             expected = _section_family(str(section))
@@ -335,8 +361,7 @@ class HubQueryService:
         if domain is not None:
             expected_domain = _normalized_domain(str(domain))
             declared = {
-                _normalized_domain(str(value))
-                for value in payload.get("research_domain") or []
+                _normalized_domain(str(value)) for value in payload.get("research_domain") or []
             }
             inferred = _infer_writing_domains(payload)
             if expected_domain not in declared | inferred:

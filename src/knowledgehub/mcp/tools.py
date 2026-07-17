@@ -385,7 +385,10 @@ class ToolRegistry:
 
     async def _writing_task(self, value: Any) -> dict[str, Any]:
         from knowledgehub.hub.config import HubConfig
-        from knowledgehub.writing_rag.v2 import WritingTaskPlanner, similarity_risk
+        from knowledgehub.writing_rag.v2 import (
+            WritingTaskPlanner,
+            embedding_similarity_risk,
+        )
 
         filters = {
             key: item
@@ -421,10 +424,12 @@ class ToolRegistry:
                 if line.strip()
             ]
             sources = [
-                {"source_id": item["writing_id"], "text": item["original_text"]}
-                for item in entries
+                {"source_id": item["writing_id"], "text": item["original_text"]} for item in entries
             ]
-            result["similarity_audit"] = similarity_risk(value.text, sources)
+            rag_config = config.rag_config("writing")
+            result["similarity_audit"] = await anyio.to_thread.run_sync(
+                lambda: embedding_similarity_risk(value.text, sources, rag_config)
+            )
         return {"ok": True, "result": result}
 
     async def _inspect_symbol(self, value: Any) -> dict[str, Any]:

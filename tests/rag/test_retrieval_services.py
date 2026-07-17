@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from knowledgehub.embeddings.models import EmbeddingBatchResult
 from knowledgehub.indexing.qdrant import SearchPoint
@@ -147,6 +148,39 @@ def test_http_knowledge_query_returns_unified_evidence(tmp_path, monkeypatch) ->
     )
     assert result["budget"]["max_tokens"] == 256
     assert result["warnings"] == ["test"]
+
+
+def test_search_api_returns_422_for_invalid_mode_and_unknown_filter(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from knowledgehub.hub.evidence import KnowledgeQueryService
+
+    config = RagConfig(
+        data_dir=tmp_path,
+        gpu_mode="cpu",
+        embedding_dim=2,
+        search_api_key=SecretValue("secret"),
+    )
+
+    def reject_unknown_filter(self, request, budget):  # type: ignore[no-untyped-def]
+        raise ValueError("unknown query filters: unexpected")
+
+    monkeypatch.setattr(KnowledgeQueryService, "query", reject_unknown_filter)
+    with pytest.raises(ValidationError) as invalid_mode:
+        KnowledgeQueryBody(knowledge_base="literature", query="test", mode="invalid")  # type: ignore[arg-type]
+    assert invalid_mode.value.errors()[0]["loc"] == ("mode",)
+
+    app = create_app(config)
+    route = next(value for value in app.routes if getattr(value, "path", "") == "/knowledge/query")
+    with pytest.raises(HTTPException) as unknown_filter:
+        route.endpoint(
+            KnowledgeQueryBody(
+                knowledge_base="literature",
+                query="test",
+                filters={"unexpected": "value"},
+            ),
+            None,
+        )
+    assert unknown_filter.value.status_code == 422
+    assert unknown_filter.value.detail == "unknown query filters: unexpected"
 
 
 def test_reranker_reduces_oom_batch_to_one() -> None:

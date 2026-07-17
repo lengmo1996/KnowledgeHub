@@ -16,11 +16,15 @@ Rollback is confirmation-gated:
 ```bash
 knowledgehub index snapshot code
 knowledgehub index list-snapshots code
-knowledgehub index rollback code <snapshot-id> --yes
+knowledgehub index rollback code <snapshot-id> \
+  --target-collection knowledgehub_code_recovery_<unique-id> \
+  --allow-qdrant-only --yes
 ```
 
-Test recovery on a non-production collection before relying on a server-level
-snapshot path in a deployment with a different Qdrant storage layout.
+`--allow-qdrant-only` is required for legacy snapshots that have no immutable
+release manifest; they cannot restore SQLite or chunk artifacts. New release
+snapshots bind and restore both Qdrant and local artifacts. Test every recovery
+on a new non-production collection before staging it.
 
 V2 Integration adds `knowledge_query` and `/knowledge/query` without changing
 the raw `/search` or `rag_search` response. Existing Skills may migrate

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from knowledgehub.core.hashing import sha256_text
-from knowledgehub.indexing.qdrant import QdrantIndex
+from knowledgehub.indexing.qdrant import QdrantIndex, QdrantSchemaError
 from knowledgehub.pipeline.models import ChunkRecord
 
 
@@ -57,3 +59,17 @@ def test_replace_document_splits_large_point_sets_into_bounded_requests() -> Non
         3,
         4,
     ]
+
+
+def test_candidate_collection_creation_fails_closed_when_name_exists() -> None:
+    class ExistingClient:
+        def collection_exists(self, _collection: str) -> bool:
+            return True
+
+    index = QdrantIndex.__new__(QdrantIndex)
+    index.collection = "existing-candidate"
+    index.dimension = 2
+    index.upsert_batch_size = 2
+    index.client = ExistingClient()
+    with pytest.raises(QdrantSchemaError, match="choose a new name"):
+        index.ensure_collection(require_new=True)

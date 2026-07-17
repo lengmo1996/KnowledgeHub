@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from knowledgehub.writing_rag.v2 import (
     WritingFeedbackStore,
     WritingProfileStore,
     WritingTaskPlanner,
+    embedding_similarity_risk,
     paragraph_features,
     paragraph_structure,
     similarity_risk,
@@ -102,6 +104,32 @@ def test_writing_structure_similarity_profile_and_feedback(tmp_path: Path) -> No
     audit = feedback.audit({"writing:w1"})
     assert audit["valid_event_count"] == 2
     assert audit["invalid_event_count"] == 0
+
+
+def test_embedding_similarity_detects_reordered_paraphrase() -> None:
+    candidate = "The model improves robustness by combining visual and textual evidence."
+    source = "Combining textual with visual evidence makes the model more robust."
+
+    class Pool:
+        def embed(self, texts):  # type: ignore[no-untyped-def]
+            vectors = {candidate: (1.0, 0.0), source: (0.95, 0.1)}
+            return SimpleNamespace(vectors=tuple(vectors[text] for text in texts))
+
+    config = SimpleNamespace(
+        embedding_model="test-embedding",
+        embedding_revision="rev-1",
+        embedding_dim=2,
+    )
+    result = embedding_similarity_risk(
+        candidate,
+        [{"source_id": "source-1", "text": source}],
+        config,
+        endpoint_pool=Pool(),
+    )
+    assert result["risk_level"] == "high"
+    assert result["layers"]["semantic"] == "evaluated"
+    assert result["matches"][0]["semantic_similarity"] > 0.9
+    assert result["semantic_backend"]["type"] == "embedding_cosine"
 
 
 def test_writing_feedback_audit_preserves_malformed_history(tmp_path: Path) -> None:

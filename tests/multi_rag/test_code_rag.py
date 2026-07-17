@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
 import yaml
 
 from knowledgehub.code_rag.build import CodeBuildService
@@ -16,6 +17,7 @@ from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.core.hashing import sha256_text
 from knowledgehub.core.models import KnowledgeDocument
+from knowledgehub.governance.releases import CandidateReleaseManager
 from knowledgehub.indexing.incremental import IndexBuildSummary
 from knowledgehub.pipeline.config import RagConfig
 
@@ -164,27 +166,56 @@ def test_candidate_build_keeps_canonical_normalized_manifest_unchanged(
         def close(self) -> None:
             pass
 
+    canonical = data_root / "normalized" / "example" / "1.0.jsonl"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text('{"frozen":true}\n', encoding="utf-8")
+    before = canonical.read_bytes()
+    (source_root / "README.md").write_text("# Candidate\n", encoding="utf-8")
+    release_manager = CandidateReleaseManager(tmp_path / "releases")
+    release = release_manager.prepare(
+        "code",
+        "candidate-test",
+        build_scope={"libraries": ["example"], "version": "1.0", "limit": 1},
+        embedding={"model": "test", "revision": "a" * 40, "dimension": 2},
+        promotion_eligible=False,
+    )
     service = CodeBuildService(
         CodeSourceRegistry.load(registry_path),
         data_root,
-        RagConfig(data_dir=tmp_path / "rag", embedding_dim=2, gpu_mode="cpu"),
+        RagConfig(
+            data_dir=release.rag_data_dir,
+            qdrant_collection=release.collection,
+            embedding_dim=2,
+            gpu_mode="cpu",
+        ),
         indexer=NoopIndexer(),  # type: ignore[arg-type]
+        candidate_release=release,
     )
-    canonical_result = service.build("example", version="1.0", limit=1)
-    canonical = Path(canonical_result["normalized_manifest"])
-    before = canonical.read_bytes()
-    (source_root / "README.md").write_text("# Candidate\n", encoding="utf-8")
-    candidate_result = service.build(
-        "example",
-        version="1.0",
-        limit=1,
-        normalized_namespace="candidate/test",
-    )
+    candidate_result = service.build("example", version="1.0", limit=1)
     candidate = Path(candidate_result["normalized_manifest"])
     assert canonical.read_bytes() == before
     assert candidate != canonical
-    assert candidate.is_relative_to(data_root / ".staging" / "normalized")
+    assert candidate.is_relative_to(release.normalized_root)
     assert candidate.read_bytes() != before
+    release_manager.record_build(release, [candidate_result])
+    with pytest.raises(ValueError, match="immutable"):
+        service.build("example", version="1.0", limit=1)
+
+
+def test_code_build_rejects_direct_non_candidate_writes(tmp_path: Path) -> None:
+    service = CodeBuildService(
+        object(),  # type: ignore[arg-type]
+        tmp_path / "code",
+        RagConfig(
+            data_dir=tmp_path / "production-rag",
+            qdrant_collection="production-code",
+            embedding_dim=2,
+            gpu_mode="cpu",
+        ),
+    )
+    with pytest.raises(RuntimeError, match="direct Code index writes are disabled"):
+        service.build("example")
+    assert not (tmp_path / "production-rag").exists()
 
 
 def test_release_rate_limit_is_explicit_partial_success(tmp_path: Path, monkeypatch) -> None:
@@ -297,3 +328,18 @@ def test_release_watch_never_downloads_and_on_demand_requires_permission(
         "example", "1.0.0", allowed=False
     )
     assert denied["status"] == "permission_required"
+    monkeypatch.setattr(
+        CodeSyncService,
+        "sync",
+        lambda _self, library, *, version, dry_run: {
+            "status": "success",
+            "library": library,
+            "version": version,
+            "dry_run": dry_run,
+        },
+    )
+    imported = OnDemandVersionImporter(config, registry).import_version(
+        "example", "1.0.0", allowed=True
+    )
+    assert imported["status"] == "synced_requires_candidate_build"
+    assert imported["build"] is None

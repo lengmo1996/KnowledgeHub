@@ -17,6 +17,7 @@ from knowledgehub.core.atomic import atomic_write_json
 from knowledgehub.core.hashing import sha256_file
 from knowledgehub.evaluation.metrics import evaluate_code
 from knowledgehub.writing_rag.analyzer import RuleWritingAnalyzer
+from knowledgehub.writing_rag.sections import section_family
 from knowledgehub.writing_rag.v2 import paragraph_structure, similarity_risk
 
 QueryCallback = Callable[[str, Mapping[str, Any], str, int], "QueryOutcome"]
@@ -126,9 +127,7 @@ class EvaluationRunner:
             groups[name] = self._group(samples, metrics, warnings=warnings)
         return groups
 
-    def _writing_groups(
-        self, *, mode: str, profile: str, top_k: int
-    ) -> dict[str, Any]:
+    def _writing_groups(self, *, mode: str, profile: str, top_k: int) -> dict[str, Any]:
         groups: dict[str, Any] = {}
         for path in sorted((self.eval_root / "writing").glob("*.jsonl")):
             samples = self._load(path)
@@ -273,11 +272,7 @@ class EvaluationRunner:
                     hit.get("source_location") or hit.get("section")
                 ):
                     traceable += 1
-                domains = (
-                    hit.get("inferred_research_domain")
-                    or hit.get("research_domain")
-                    or []
-                )
+                domains = hit.get("inferred_research_domain") or hit.get("research_domain") or []
                 for domain in domains:
                     domain_results += 1
                     wrong_domains += bool(allowed_domains and domain not in allowed_domains)
@@ -331,9 +326,7 @@ class EvaluationRunner:
         }
 
     @staticmethod
-    def _required_failures(
-        samples: Sequence[Mapping[str, Any]], required: set[str]
-    ) -> list[str]:
+    def _required_failures(samples: Sequence[Mapping[str, Any]], required: set[str]) -> list[str]:
         return [
             f"sample {index} missing {', '.join(sorted(required - set(sample)))}"
             for index, sample in enumerate(samples, 1)
@@ -356,18 +349,13 @@ class EvaluationRunner:
 
 
 def classify_section_heading(heading: str) -> str:
-    lowered = heading.lower()
-    if "intro" in lowered:
-        return "Introduction"
-    if "related" in lowered or "background" in lowered:
-        return "Related Work"
-    if "method" in lowered or "approach" in lowered:
-        return "Method"
-    if any(value in lowered for value in ("experiment", "result", "analysis")):
-        return "Experiment"
-    if "conclu" in lowered or "discussion" in lowered:
-        return "Conclusion"
-    return "Unknown"
+    return {
+        "introduction": "Introduction",
+        "related_work": "Related Work",
+        "method": "Method",
+        "experiment": "Experiment",
+        "conclusion": "Conclusion",
+    }.get(section_family(heading), "Unknown")
 
 
 def compare_reports(

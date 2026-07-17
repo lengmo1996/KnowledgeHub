@@ -43,6 +43,18 @@ def test_offline_evaluation_is_grouped_and_deterministic() -> None:
     assert "overall_score" not in report["summary"]
 
 
+def test_code_core_evaluation_groups_have_ten_samples_each() -> None:
+    report = EvaluationRunner(ROOT / "eval").run(domain="code", mode="offline")
+
+    for group in (
+        "code/api_usage",
+        "code/compatibility",
+        "code/debugging",
+        "code/source_navigation",
+    ):
+        assert report["groups"][group]["sample_count"] >= 10
+
+
 def test_live_evaluation_uses_observed_hits_not_fixture_oracles() -> None:
     def query(
         domain: str,

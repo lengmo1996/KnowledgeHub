@@ -30,7 +30,9 @@ knowledgehub environment capture --name rag
 # Preview one installed version, or omit --version to include configured adjacent versions.
 knowledgehub sync code --library transformers --version installed --dry-run
 knowledgehub sync code --library transformers
-knowledgehub build code --library transformers --incremental
+knowledgehub build code --library transformers --version 5.13.1 --limit 20 \
+  --candidate-collection knowledgehub_code_smoke_<unique-id>
+knowledgehub index validate-candidate code knowledgehub_code_smoke_<unique-id>
 
 # Derive a bounded Writing set from existing parsed papers.
 knowledgehub derive writing --limit 5 --dry-run
@@ -150,7 +152,12 @@ separated Venue/Personal profiles, task plans and feedback-aware ranking.
 knowledgehub validate all
 knowledgehub index snapshot code
 knowledgehub build code --library diffusers --version 0.39.0 --limit 20 --candidate-collection knowledgehub_code_candidate_20260716
-knowledgehub index stage code knowledgehub_code_candidate_20260716
+knowledgehub index validate-candidate code knowledgehub_code_candidate_20260716
+# A bounded candidate is intentionally not promotion eligible. Clone the
+# complete active release without expanding its source scope before staging:
+knowledgehub index bootstrap-candidate code knowledgehub_code_release_<unique-id>
+knowledgehub index stage code knowledgehub_code_release_<unique-id> \
+  --release-manifest /data/KnowledgeHub/code/releases/code/knowledgehub_code_release_<unique-id>/release.json
 knowledgehub index promote code --yes
 knowledgehub index rollback-alias code --yes
 knowledgehub symbol build transformers 5.13.1

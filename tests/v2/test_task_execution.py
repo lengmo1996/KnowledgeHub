@@ -418,6 +418,16 @@ def test_cli_tracks_sync_build_and_derive_but_not_dry_run(
     monkeypatch.setattr(hub_cli, "ReleaseWatchService", FakeWatch)
     monkeypatch.setattr(hub_cli, "OnDemandVersionImporter", FakeImporter)
 
+    assert hub_cli.run_hub_command(
+        build_parser().parse_args(
+            ["build", "code", "--library", "demo", "--version", "1.0"]
+        )
+    ) == 2
+    error = json.loads(capsys.readouterr().out)
+    assert error["status"] == "failed"
+    assert "direct production builds are disabled" in error["error"]
+    assert not store.list_tasks()
+
     commands = [
         ["sync", "code", "--library", "demo", "--version", "1.0"],
         ["sync", "releases", "--library", "demo"],
@@ -430,7 +440,16 @@ def test_cli_tracks_sync_build_and_derive_but_not_dry_run(
             "2.0",
             "--allow-download",
         ],
-        ["build", "code", "--library", "demo", "--version", "1.0"],
+        [
+            "build",
+            "code",
+            "--library",
+            "demo",
+            "--version",
+            "1.0",
+            "--candidate-collection",
+            "code-candidate-test",
+        ],
         ["derive", "writing", "--limit", "2"],
     ]
     for command in commands:

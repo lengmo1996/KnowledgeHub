@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import uuid
@@ -15,6 +16,7 @@ from typing import Any, ClassVar, Iterable, Literal, Mapping, Sequence
 
 from knowledgehub.core.atomic import atomic_write_json
 from knowledgehub.core.hashing import sha256_file, sha256_json
+from knowledgehub.writing_rag.sections import section_family
 
 _FIRST_PERSON = re.compile(r"\b(?:we|our|ours|us)\b", re.I)
 _PASSIVE = re.compile(r"\b(?:is|are|was|were|be|been|being)\s+\w+(?:ed|en)\b", re.I)
@@ -31,14 +33,10 @@ _TRANSITION = re.compile(
     r"in contrast|for example|specifically|thus|although|despite)\b",
     re.I,
 )
-_LEXICAL_TOKEN = re.compile(
-    r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*|[\u3400-\u4dbf\u4e00-\u9fff]"
-)
+_LEXICAL_TOKEN = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*|[\u3400-\u4dbf\u4e00-\u9fff]")
 _CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 _CJK_FIRST_PERSON = re.compile(r"(?:我们|本人|我)")
-_CJK_PASSIVE = re.compile(
-    r"(?:被|受到|由[^\uff0c\u3002\uff01\uff1f]{0,20}(?:完成|执行|实现|进行))"
-)
+_CJK_PASSIVE = re.compile(r"(?:被|受到|由[^\uff0c\u3002\uff01\uff1f]{0,20}(?:完成|执行|实现|进行))")
 _CJK_CAUTIOUS = re.compile(r"(?:可能|或许|似乎|表明|建议|需要进一步|尚需|不确定)")
 _CJK_STRONG = re.compile(r"(?:显然|明显|完全|证明|始终|必然|显著)")
 _CJK_CRITICAL = re.compile(r"(?:失败|缺点|不足|严重|根本性限制|局限)")
@@ -261,6 +259,72 @@ def similarity_risk(
     }
 
 
+def embedding_similarity_risk(
+    candidate: str,
+    sources: Sequence[Mapping[str, str]],
+    rag_config: Any,
+    *,
+    endpoint_pool: Any | None = None,
+    batch_size: int = 16,
+) -> dict[str, Any]:
+    """Run the similarity audit with the configured embedding model."""
+
+    if batch_size < 1:
+        raise ValueError("embedding similarity batch size must be positive")
+    if not candidate.strip():
+        raise ValueError("similarity candidate cannot be empty")
+    if endpoint_pool is None:
+        from knowledgehub.embeddings.endpoint_pool import EndpointPool
+
+        endpoint_pool = EndpointPool.create(
+            rag_config.embedding_endpoints,
+            output_dim=rag_config.embedding_dim,
+            normalize=rag_config.embedding_normalize,
+            timeout_seconds=rag_config.embedding_timeout_seconds,
+            strategy=rag_config.embedding_request_strategy,
+            api_key=rag_config.embedding_api_key.get_secret_value(),
+        )
+        owns_pool = True
+    else:
+        owns_pool = False
+    texts = [str(source.get("text") or "") for source in sources]
+    try:
+        candidate_vector = endpoint_pool.embed([candidate]).vectors[0]
+        vectors: list[Sequence[float]] = []
+        for start in range(0, len(texts), batch_size):
+            vectors.extend(endpoint_pool.embed(texts[start : start + batch_size]).vectors)
+        scores = {
+            text: _cosine_similarity(candidate_vector, vector)
+            for text, vector in zip(texts, vectors, strict=True)
+        }
+        result = similarity_risk(
+            candidate,
+            sources,
+            semantic_scorer=lambda _candidate, source: scores[source],
+        )
+        result["semantic_backend"] = {
+            "type": "embedding_cosine",
+            "model": rag_config.embedding_model,
+            "revision": rag_config.embedding_revision,
+            "dimension": rag_config.embedding_dim,
+        }
+        return result
+    finally:
+        if owns_pool:
+            endpoint_pool.close()
+
+
+def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) != len(right):
+        raise ValueError("semantic embedding dimensions do not match")
+    numerator = sum(a * b for a, b in zip(left, right, strict=True))
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return max(-1.0, min(1.0, numerator / (left_norm * right_norm)))
+
+
 def _longest_common_run(left: Sequence[str], right: Sequence[str]) -> int:
     previous = [0] * (len(right) + 1)
     longest = 0
@@ -296,9 +360,7 @@ def writing_profile(
     lengths = [int(item["paragraph_word_count"]) for item in features]
     transitions = Counter(value for item in features for value in item["transition_markers"])
     terms = Counter(
-        token
-        for row in rows
-        for token in _profile_terms(str(row.get("original_text") or ""))
+        token for row in rows for token in _profile_terms(str(row.get("original_text") or ""))
     )
     abbreviations = Counter(value for item in features for value in item["abbreviations"])
     source_ids = sorted(
@@ -359,18 +421,7 @@ def writing_profile(
 
 
 def _section_family(section: str) -> str:
-    lowered = section.lower()
-    if "intro" in lowered:
-        return "introduction"
-    if "method" in lowered or "approach" in lowered:
-        return "method"
-    if any(value in lowered for value in ("experiment", "result", "analysis")):
-        return "experiment"
-    if "related" in lowered:
-        return "related"
-    if "conclu" in lowered:
-        return "conclusion"
-    return "other"
+    return section_family(section)
 
 
 class WritingProfileStore:
@@ -395,19 +446,18 @@ class WritingProfileStore:
         if missing:
             raise ValueError(f"Venue profile papers not found: {', '.join(missing)}")
         if sections:
-            selected_sections = {value.lower() for value in sections}
+            selected_sections = {_section_family(value) for value in sections}
             selected = [
                 row
                 for row in selected
-                if _section_family(str(row.get("source_section") or ""))
-                in selected_sections
+                if _section_family(str(row.get("source_section") or "")) in selected_sections
             ]
             if not selected:
                 raise ValueError("No Venue profile samples matched the selected sections")
         profile = writing_profile(selected, profile_type="venue", name=name)
         profile["selection"] = {
             "paper_ids": sorted(selected_ids),
-            "section_families": sorted(value.lower() for value in sections),
+            "section_families": sorted(_section_family(value) for value in sections),
         }
         return self.save(profile)
 
@@ -439,9 +489,9 @@ class WritingProfileStore:
             raise ValueError("No paragraph of at least 20 words was found in the supplied drafts")
         profile = writing_profile(rows, profile_type="personal", name=name)
         profile["selection"] = {
-            "draft_content_hashes": sorted({
-                str(row["source_paper_id"]).removeprefix("draft:") for row in rows
-            })
+            "draft_content_hashes": sorted(
+                {str(row["source_paper_id"]).removeprefix("draft:") for row in rows}
+            )
         }
         return self.save(profile)
 

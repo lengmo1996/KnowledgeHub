@@ -12,7 +12,9 @@ knowledgehub source inspect transformers
 knowledgehub environment capture --name rag
 knowledgehub sync code --library transformers --version installed --dry-run
 knowledgehub sync code --library transformers --version installed
-knowledgehub build code --library transformers --incremental
+knowledgehub build code --library transformers --version 5.13.1 --limit 20 \
+  --candidate-collection knowledgehub_code_smoke_<unique-id>
+knowledgehub index validate-candidate code knowledgehub_code_smoke_<unique-id>
 knowledgehub source dependencies transformers --version 5.13.1
 knowledgehub symbol build transformers 5.13.0
 knowledgehub symbol build transformers 5.13.1
@@ -28,15 +30,21 @@ The source-selection configuration is fingerprinted; changing include/exclude
 or bounds publishes a parallel checkout instead of silently reusing incomplete
 localized files.
 
-Source data is stored under `/data/KnowledgeHub/code/sources`, normalized
-documents under `normalized`, sync/build manifests under `manifests`, and
-consumer state under `state`. Repeating an unchanged sync or build is
-idempotent. `--prune` removes stale vectors and creates tombstones but retains
-downloaded and normalized artifacts.
+Source data is stored under `/data/KnowledgeHub/code/sources`. Every writable
+Code build must target a new physical candidate. Its normalized documents,
+SQLite state and chunk artifacts are isolated under
+`/data/KnowledgeHub/code/releases/code/<candidate>`; a validated release is
+immutable. Direct writes to the configured production collection and stable
+alias are rejected. Repeating an unchanged sync is idempotent.
 
 Normalized manifests are version-scoped and never overwrite another version.
-Because index state is shared across Code versions, `--prune` is rejected for
-version-filtered or limited builds and is valid only for a complete build.
+`--prune` is rejected for version-filtered or limited builds. Fresh complete
+release candidates do not need pruning.
+
+Use `index bootstrap-candidate code <new-collection>` for an atomic maintenance
+release equivalent to the current active document scope. `build code --all`
+expands to every localized source file and is not promotion eligible unless the
+operator also supplies `--allow-source-expansion` explicitly.
 
 Use `--version` and `--limit` for bounded smoke builds before a complete
 version. Per-file chunk caps in the registry prevent pathological generated

@@ -90,6 +90,30 @@ def test_incremental_index_is_idempotent_and_prune_tombstones(tmp_path: Path) ->
     assert service.state.documents()["doc-1"]["active"] == 0
 
 
+def test_candidate_index_requires_a_new_collection_only_on_first_build(
+    tmp_path: Path,
+) -> None:
+    class CandidateIndex(Index):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ensure_modes: list[bool] = []
+
+        def ensure_collection(self, *, require_new: bool = False) -> None:
+            self.ensure_modes.append(require_new)
+
+    index = CandidateIndex()
+    service = IncrementalChunkIndexer(
+        RagConfig(data_dir=tmp_path, gpu_mode="cpu", embedding_dim=2),
+        endpoint_pool=Pool(),
+        sparse_encoder=Sparse(),
+        index=index,
+        require_new_collection=True,
+    )
+    service.build([_input("doc-1")], knowledge_base="code")
+    service.build([_input("doc-2")], knowledge_base="code")
+    assert index.ensure_modes == [True, False]
+
+
 def test_code_intent_and_query_priority() -> None:
     assert classify_code_intent("Traceback: old argument is deprecated") == "debug"
 
@@ -150,9 +174,7 @@ def test_code_query_merges_user_requested_exact_symbol(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     data_root = tmp_path / "code"
-    SymbolIndex(data_root / "state" / "symbols.sqlite3").build(
-        "demo", "1.0", source, [module]
-    )
+    SymbolIndex(data_root / "state" / "symbols.sqlite3").build("demo", "1.0", source, [module])
     marker = data_root / "sources" / "repositories" / "demo" / "1.0" / "current.json"
     marker.parent.mkdir(parents=True)
     marker.write_text(
@@ -201,9 +223,7 @@ def test_code_query_merges_user_requested_exact_symbol(tmp_path: Path) -> None:
 
 
 def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
-    WritingFeedbackStore(tmp_path / "state" / "feedback.sqlite3").submit(
-        "writing:w2", "useful"
-    )
+    WritingFeedbackStore(tmp_path / "state" / "feedback.sqlite3").submit("writing:w2", "useful")
 
     class Service:
         endpoint_pool = SimpleNamespace(close=lambda: None)
@@ -312,3 +332,112 @@ def test_writing_section_filter_normalizes_legacy_headings(tmp_path: Path) -> No
     assert [hit.point_id for hit in response.hits] == ["intro"]
     assert response.hits[0].payload["inferred_research_domain"] == ["computer_vision"]
     assert response.hits[0].payload["research_domain_inference"] is True
+
+
+def test_writing_method_filter_does_not_match_paper_title_substrings(tmp_path: Path) -> None:
+    class Service:
+        endpoint_pool = SimpleNamespace(close=lambda: None)
+        reranker = None
+
+        def search(self, request):  # type: ignore[no-untyped-def]
+            return SearchResponse(
+                query=request.query,
+                mode="hybrid",
+                collection="writing",
+                embedding_model="m",
+                embedding_revision="r",
+                embedding_dimension=2,
+                reranker_profile="off",
+                reranker_model=None,
+                reranker_revision=None,
+                reranker_fallback=None,
+                hits=(
+                    SearchHit(
+                        point_id="title",
+                        score=0.9,
+                        payload={
+                            "document_id": "w1",
+                            "section": "A Practical Approach to Small Data Learning",
+                        },
+                    ),
+                    SearchHit(
+                        point_id="method",
+                        score=0.8,
+                        payload={"document_id": "w2", "section": "3. Methods"},
+                    ),
+                ),
+                timings={},
+            )
+
+    config = SimpleNamespace(
+        rag_config=lambda _kb: RagConfig(data_dir=tmp_path, gpu_mode="cpu", embedding_dim=2),
+        writing=SimpleNamespace(data_root=tmp_path),
+    )
+    response = HubQueryService(config, service_factory=lambda _: Service()).search(
+        HubQueryRequest(
+            knowledge_base="writing",
+            query="method overview",
+            filters={"section": "Method"},
+            top_k=2,
+        )
+    )
+    assert [hit.point_id for hit in response.hits] == ["method"]
+
+
+def test_literature_demotes_bibliography_unless_explicitly_requested(tmp_path: Path) -> None:
+    observed: list[int] = []
+
+    class Service:
+        endpoint_pool = SimpleNamespace(close=lambda: None)
+        reranker = None
+
+        def search(self, request):  # type: ignore[no-untyped-def]
+            observed.append(request.limit)
+            return SearchResponse(
+                query=request.query,
+                mode="hybrid",
+                collection="literature",
+                embedding_model="m",
+                embedding_revision="r",
+                embedding_dimension=2,
+                reranker_profile="off",
+                reranker_model=None,
+                reranker_revision=None,
+                reranker_fallback=None,
+                hits=(
+                    SearchHit(
+                        point_id="refs",
+                        score=0.99,
+                        payload={"section_path": ["Paper", "References"]},
+                    ),
+                    SearchHit(point_id="intro", score=0.9, payload={"section": "Introduction"}),
+                    SearchHit(point_id="method", score=0.8, payload={"section": "Methods"}),
+                    SearchHit(point_id="result", score=0.7, payload={"section": "Results"}),
+                ),
+                timings={},
+            )
+
+    config = SimpleNamespace(
+        rag_config=lambda _kb: RagConfig(data_dir=tmp_path, gpu_mode="cpu", embedding_dim=2)
+    )
+    service = HubQueryService(config, service_factory=lambda _: Service())
+    ordinary = service.search(
+        HubQueryRequest(
+            knowledge_base="literature",
+            query="retrieval augmented generation",
+            top_k=3,
+            prefetch_limit=10,
+        )
+    )
+    explicit = service.search(
+        HubQueryRequest(
+            knowledge_base="literature",
+            query="references about retrieval augmented generation",
+            top_k=3,
+            prefetch_limit=10,
+        )
+    )
+    assert observed == [10, 3]
+    assert [hit.point_id for hit in ordinary.hits] == ["intro", "method", "result"]
+    assert ordinary.warnings == ("bibliography_sections_demoted",)
+    assert explicit.hits[0].point_id == "refs"

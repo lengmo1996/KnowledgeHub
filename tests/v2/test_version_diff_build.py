@@ -60,10 +60,16 @@ def _service(tmp_path: Path) -> tuple[VersionDiffBuildService, CapturingIndexer]
     data_root = tmp_path / "code"
     catalog = SymbolIndex(data_root / "state" / "symbols.sqlite3")
     for version, content, commit in (
-        ("1.0", "class Model:\n    def run(self, value):\n        return value\n", "a" * 40),
+        (
+            "1.0",
+            "class Model:\n    def run(self, value):\n        return value\n\n"
+            "def old_helper(value):\n    return value\n",
+            "a" * 40,
+        ),
         (
             "2.0",
-            "class Model:\n    def run(self, value, strict=False):\n        return value\n",
+            "class Model:\n    def run(self, value, strict=False):\n        return value\n\n"
+            "def new_helper(value):\n    return value\n",
             "b" * 40,
         ),
     ):
@@ -145,3 +151,18 @@ def test_changed_pair_catalog_and_diff_cli_are_bounded(tmp_path: Path) -> None:
     )
     assert args.build_domain == "diff"
     assert args.limit == 3 and args.dry_run is True
+
+
+def test_default_diff_includes_introduced_and_removed_symbols(tmp_path: Path) -> None:
+    service, _indexer = _service(tmp_path)
+    pairs = service.catalog.changed_pairs("demo", "1.0", "2.0", limit=10)
+    assert any(
+        old is None and new and new["qualified_name"].endswith("new_helper") for old, new in pairs
+    )
+    assert any(
+        new is None and old and old["qualified_name"].endswith("old_helper") for old, new in pairs
+    )
+
+    result = service.build("demo", "1.0", "2.0", dry_run=True)
+    assert result["change_statuses"]["introduced"] == 1
+    assert result["change_statuses"]["removed"] == 1

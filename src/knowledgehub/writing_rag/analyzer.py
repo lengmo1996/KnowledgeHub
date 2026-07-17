@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
+from knowledgehub.writing_rag.sections import section_family
+
 _CITATION = re.compile(r"\[(?:\d+[ ,;-]*)+\]|\([A-Z][A-Za-z-]+(?: et al\.)?,? \d{4}[a-z]?\)")
 _NUMBER = re.compile(r"\b\d+(?:\.\d+)?%?\b")
 _FORMULA = re.compile(r"[$\\][^\n]{2,}|[=<>]\s*[A-Za-z0-9_{}^]+")
@@ -31,16 +33,16 @@ class WritingAnalyzer(Protocol):
     name: str
     version: str
 
-    def analyze(self, text: str, *, section: str, domains: Sequence[str]) -> WritingAnalysis | None: ...
+    def analyze(
+        self, text: str, *, section: str, domains: Sequence[str]
+    ) -> WritingAnalysis | None: ...
 
 
 class RuleWritingAnalyzer:
     name = "rules"
     version = "rules-v1"
 
-    def analyze(
-        self, text: str, *, section: str, domains: Sequence[str]
-    ) -> WritingAnalysis | None:
+    def analyze(self, text: str, *, section: str, domains: Sequence[str]) -> WritingAnalysis | None:
         value = " ".join(text.split())
         if len(value) < 60 or len(value) > 1800 or _FORMULA.search(value):
             return None
@@ -71,23 +73,46 @@ class RuleWritingAnalyzer:
 
     @staticmethod
     def _function(text: str, section: str) -> str | None:
-        lowered = section.lower()
-        if "intro" in lowered:
-            if _GAP.search(text):
-                return "research_gap"
+        family = section_family(section)
+        if family == "introduction":
             if re.search(r"we (?:propose|present|introduce)|our contribution", text, re.I):
                 return "contribution_statement"
+            if _GAP.search(text):
+                return "research_gap"
             if re.search(r"motiv|therefore|to address", text, re.I):
                 return "motivation"
-            return "research_context"
-        if "related" in lowered:
-            return "method_comparison" if re.search(r"whereas|unlike|compared", text, re.I) else "method_summary"
-        if "method" in lowered or "approach" in lowered:
-            return "design_rationale" if re.search(r"because|in order to|allows us", text, re.I) else "method_overview"
-        if "experiment" in lowered or "result" in lowered:
-            return "result_interpretation" if re.search(r"indicat|suggest|because", text, re.I) else "experimental_setup"
-        if "conclu" in lowered:
-            return "future_work" if re.search(r"future|remain|limitation", text, re.I) else "work_summary"
+            return "background"
+        if family == "related_work":
+            return (
+                "method_comparison"
+                if re.search(r"whereas|unlike|compared", text, re.I)
+                else "method_summary"
+            )
+        if family == "method":
+            return (
+                "design_rationale"
+                if re.search(r"because|in order to|allows us", text, re.I)
+                else "method_overview"
+            )
+        if family == "experiment":
+            if re.search(
+                r"\b(?:outperform|higher|lower|increase|decrease|improv\w*\s+by|"
+                r"compared (?:with|to)|versus)\b",
+                text,
+                re.I,
+            ):
+                return "quantitative_comparison"
+            return (
+                "result_interpretation"
+                if re.search(r"indicat|suggest|because", text, re.I)
+                else "experimental_setup"
+            )
+        if family == "conclusion":
+            if re.search(r"\bfuture|will (?:investigate|explore|study|extend)\b", text, re.I):
+                return "future_work"
+            if re.search(r"\b(?:remain|limitation|limited|challenge|cannot|fails?)\b", text, re.I):
+                return "limitation"
+            return "work_summary"
         return None
 
     @staticmethod
@@ -108,6 +133,12 @@ class RuleWritingAnalyzer:
                 ("identify_limitation", "motivate_direction"),
                 "Use as a transition from the gap to the proposed approach.",
             ),
+            "background": (
+                "[Research topic] has become important because [context or impact].",
+                ("establish_topic", "explain_significance"),
+                "Use to establish context before narrowing to the specific problem.",
+            ),
+            # Retained for profiles and manifests created with the pre-V2 label.
             "research_context": (
                 "[Research topic] has become important because [context or impact].",
                 ("establish_topic", "explain_significance"),
@@ -138,6 +169,11 @@ class RuleWritingAnalyzer:
                 ("report_finding", "interpret_finding"),
                 "Keep interpretation within the evidence supplied by the experiment.",
             ),
+            "quantitative_comparison": (
+                "Compared with [baseline], [method] changes [metric] by [supported amount].",
+                ("identify_baseline", "report_quantitative_difference"),
+                "Use only with an explicit metric, direction and supported comparison.",
+            ),
             "experimental_setup": (
                 "We evaluate [method] on [data or setting] using [metrics and protocol].",
                 ("state_subject", "describe_protocol"),
@@ -147,6 +183,11 @@ class RuleWritingAnalyzer:
                 "Future work will investigate [open limitation] in [broader setting].",
                 ("acknowledge_limitation", "propose_future_direction"),
                 "Use for concrete limitations rather than generic aspirations.",
+            ),
+            "limitation": (
+                "A remaining limitation is [bounded constraint], which affects [scope or setting].",
+                ("acknowledge_limitation", "bound_impact"),
+                "State only limitations supported by the source and keep their scope explicit.",
             ),
             "work_summary": (
                 "This work addressed [problem] by introducing [approach] and demonstrated [finding].",

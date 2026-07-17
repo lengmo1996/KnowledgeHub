@@ -50,7 +50,9 @@ class SymbolIndex:
                 """
             )
 
-    def build(self, library: str, version: str, root: Path, paths: Iterable[Path]) -> dict[str, int]:
+    def build(
+        self, library: str, version: str, root: Path, paths: Iterable[Path]
+    ) -> dict[str, int]:
         symbols: dict[str, SymbolRecord] = {}
         relations: set[tuple[str, str, str, str]] = set()
         for path in paths:
@@ -71,23 +73,38 @@ class SymbolIndex:
                     for relation, target in _relations(node):
                         relations.add((record.qualified_name, relation, target, relative))
         with sqlite3.connect(self.path) as connection:
-            connection.execute("DELETE FROM relations WHERE library=? AND version=?", (library, version))
-            connection.execute("DELETE FROM symbols WHERE library=? AND version=?", (library, version))
+            connection.execute(
+                "DELETE FROM relations WHERE library=? AND version=?", (library, version)
+            )
+            connection.execute(
+                "DELETE FROM symbols WHERE library=? AND version=?", (library, version)
+            )
             connection.executemany(
                 "INSERT INTO symbols VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     (
-                        record.symbol_id, record.library, record.version, record.module,
-                        record.qualified_name, record.symbol_type, record.path,
-                        record.start_line, record.end_line, record.signature,
-                        record.docstring_hash, record.ast_hash,
+                        record.symbol_id,
+                        record.library,
+                        record.version,
+                        record.module,
+                        record.qualified_name,
+                        record.symbol_type,
+                        record.path,
+                        record.start_line,
+                        record.end_line,
+                        record.signature,
+                        record.docstring_hash,
+                        record.ast_hash,
                     )
                     for record in symbols.values()
                 ],
             )
             connection.executemany(
                 "INSERT OR IGNORE INTO relations VALUES(?,?,?,?,?,?)",
-                [(library, version, source, relation, target, evidence) for source, relation, target, evidence in relations],
+                [
+                    (library, version, source, relation, target, evidence)
+                    for source, relation, target, evidence in relations
+                ],
             )
         return {"symbols": len(symbols), "relations": len(relations)}
 
@@ -123,41 +140,63 @@ class SymbolIndex:
 
     def changed_pairs(
         self, library: str, from_version: str, to_version: str, *, limit: int = 20
-    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    ) -> list[tuple[dict[str, Any] | None, dict[str, Any] | None]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
         with self._connection() as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
-                """SELECT old.symbol_id AS old_symbol_id,
-                          old.library AS old_library,old.version AS old_version,
-                          old.module AS old_module,old.qualified_name AS old_qualified_name,
-                          old.symbol_type AS old_symbol_type,old.path AS old_path,
-                          old.start_line AS old_start_line,old.end_line AS old_end_line,
-                          old.signature AS old_signature,
-                          old.docstring_hash AS old_docstring_hash,old.ast_hash AS old_ast_hash,
-                          new.symbol_id AS new_symbol_id,
-                          new.library AS new_library,new.version AS new_version,
-                          new.module AS new_module,new.qualified_name AS new_qualified_name,
-                          new.symbol_type AS new_symbol_type,new.path AS new_path,
-                          new.start_line AS new_start_line,new.end_line AS new_end_line,
-                          new.signature AS new_signature,
-                          new.docstring_hash AS new_docstring_hash,new.ast_hash AS new_ast_hash
-                   FROM symbols AS old
-                   JOIN symbols AS new
-                     ON new.library=old.library
-                    AND new.qualified_name=old.qualified_name
-                   WHERE old.library=? AND old.version=? AND new.version=?
-                     AND old.ast_hash<>new.ast_hash
-                   ORDER BY old.qualified_name LIMIT ?""",
-                (library, from_version, to_version, limit),
+                """SELECT old.symbol_id AS old_id,new.symbol_id AS new_id,
+                          old.qualified_name AS sort_name
+                     FROM symbols AS old
+                LEFT JOIN symbols AS new
+                       ON new.library=old.library
+                      AND new.version=?
+                      AND new.qualified_name=old.qualified_name
+                    WHERE old.library=? AND old.version=?
+                      AND (new.symbol_id IS NULL OR old.ast_hash<>new.ast_hash)
+                    UNION ALL
+                   SELECT NULL AS old_id,new.symbol_id AS new_id,
+                          new.qualified_name AS sort_name
+                     FROM symbols AS new
+                LEFT JOIN symbols AS old
+                       ON old.library=new.library
+                      AND old.version=?
+                      AND old.qualified_name=new.qualified_name
+                    WHERE new.library=? AND new.version=? AND old.symbol_id IS NULL
+                 ORDER BY sort_name LIMIT ?""",
+                (
+                    to_version,
+                    library,
+                    from_version,
+                    from_version,
+                    library,
+                    to_version,
+                    limit,
+                ),
             ).fetchall()
-        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
-        for row in rows:
-            value = dict(row)
-            old = {key.removeprefix("old_"): item for key, item in value.items() if key.startswith("old_")}
-            new = {key.removeprefix("new_"): item for key, item in value.items() if key.startswith("new_")}
-            pairs.append((old, new))
+            pairs: list[tuple[dict[str, Any] | None, dict[str, Any] | None]] = []
+            for row in rows:
+                old_row = (
+                    connection.execute(
+                        "SELECT * FROM symbols WHERE symbol_id=?", (row["old_id"],)
+                    ).fetchone()
+                    if row["old_id"] is not None
+                    else None
+                )
+                new_row = (
+                    connection.execute(
+                        "SELECT * FROM symbols WHERE symbol_id=?", (row["new_id"],)
+                    ).fetchone()
+                    if row["new_id"] is not None
+                    else None
+                )
+                pairs.append(
+                    (
+                        dict(old_row) if old_row is not None else None,
+                        dict(new_row) if new_row is not None else None,
+                    )
+                )
         return pairs
 
     def _connection(self) -> sqlite3.Connection:
@@ -178,11 +217,15 @@ def _nodes(tree: ast.AST) -> Iterable[tuple[ast.AST, str | None]]:
             yield node, None
 
 
-def _symbol(library: str, version: str, module: str, path: str, node: ast.AST, parent: str | None) -> SymbolRecord | None:
+def _symbol(
+    library: str, version: str, module: str, path: str, node: ast.AST, parent: str | None
+) -> SymbolRecord | None:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         name = node.name
         kind = "class" if isinstance(node, ast.ClassDef) else "method" if parent else "function"
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(isinstance(item, ast.Name) and item.id == "property" for item in node.decorator_list):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            isinstance(item, ast.Name) and item.id == "property" for item in node.decorator_list
+        ):
             kind = "property"
         signature = _signature(node)
         docstring = ast.get_docstring(node) or ""
@@ -198,9 +241,17 @@ def _symbol(library: str, version: str, module: str, path: str, node: ast.AST, p
     qualified = ".".join(value for value in (module, parent, name) if value)
     return SymbolRecord(
         f"{library}@{version}::{module}::{'.'.join(value for value in (parent, name) if value)}",
-        library, version, module, qualified, kind, path, int(getattr(node, "lineno", 1)),
-        int(getattr(node, "end_lineno", getattr(node, "lineno", 1))), signature,
-        sha256_text(docstring), sha256_json(ast.dump(node, include_attributes=False)),
+        library,
+        version,
+        module,
+        qualified,
+        kind,
+        path,
+        int(getattr(node, "lineno", 1)),
+        int(getattr(node, "end_lineno", getattr(node, "lineno", 1))),
+        signature,
+        sha256_text(docstring),
+        sha256_json(ast.dump(node, include_attributes=False)),
     )
 
 

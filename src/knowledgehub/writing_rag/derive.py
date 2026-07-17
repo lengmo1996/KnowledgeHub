@@ -18,11 +18,19 @@ from knowledgehub.indexing.incremental import IncrementalChunkIndexer, IndexInpu
 from knowledgehub.pipeline.artifacts import safe_document_name
 from knowledgehub.pipeline.models import ChunkRecord
 from knowledgehub.writing_rag.analyzer import RuleWritingAnalyzer, WritingAnalyzer
+from knowledgehub.writing_rag.sections import normalize_section_heading
 from knowledgehub.writing_rag.v2 import paragraph_features, paragraph_structure
 
 _NAMESPACE = uuid.UUID("d04ea279-19a5-5e05-afab-cc25f389369f")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _REFERENCE = re.compile(r"^(references|bibliography|acknowledg(?:e)?ments?)$", re.I)
+_CAPTION = re.compile(
+    r"^(?:[*_]{0,2})(?:fig(?:ure)?|table)\s*"
+    r"(?:[A-Z]?\d+(?:\.\d+)*|[IVX]+)\s*[:.\-\u2013\u2014]",
+    re.I,
+)
+_LATIN_WORD = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*\b")
+_CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +200,10 @@ class WritingDerivationService:
             )
         )[:12]
         for section, paragraph_index, text in self._paragraphs(markdown):
+            if self._exclude_source_material(text):
+                continue
+            if normalize_section_heading(section) == normalize_section_heading(title):
+                continue
             analysis = self.analyzer.analyze(text, section=section, domains=domains)
             if analysis is None:
                 continue
@@ -242,6 +254,13 @@ class WritingDerivationService:
                 prompt_version=None,
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
+
+    @staticmethod
+    def _exclude_source_material(text: str) -> bool:
+        normalized = " ".join(text.split())
+        if _CAPTION.match(normalized):
+            return True
+        return not _CJK.search(normalized) and len(_LATIN_WORD.findall(normalized)) < 12
 
     @staticmethod
     def _collection_values(metadata: Mapping[str, Any]) -> set[str]:

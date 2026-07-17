@@ -29,11 +29,13 @@ from knowledgehub.retrieval.service import RetrievalService
 class SearchBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=1)
-    knowledge_base: str = "literature"
+    knowledge_base: Literal["literature", "code", "writing"] = "literature"
     intent: str | None = None
     filters: dict[str, Any] = Field(default_factory=dict)
-    return_mode: str = "pattern_first"
-    mode: str = "hybrid"
+    return_mode: Literal["pattern_first", "paragraph_structure", "include_original"] = (
+        "pattern_first"
+    )
+    mode: Literal["dense", "sparse", "hybrid"] = "hybrid"
     limit: int = Field(default=10, ge=1, le=100)
     prefetch_limit: int = Field(default=50, ge=1, le=500)
     collection_key: str | None = None
@@ -44,8 +46,8 @@ class SearchBody(BaseModel):
     document_id: str | None = None
     attachment_key: str | None = None
     use_reranker: bool = False
-    reranker_profile: str = "off"
-    fallback_policy: str = "degrade"
+    reranker_profile: Literal["off", "light", "quality"] = "off"
+    fallback_policy: Literal["degrade", "strict"] = "degrade"
 
 
 class KnowledgeQueryBody(SearchBody):
@@ -132,38 +134,39 @@ def create_app(
 
     @app.post("/search")
     def search(body: SearchBody, _: None = Depends(authorize)) -> dict[str, Any]:
-        if body.knowledge_base != "literature":
-            from knowledgehub.hub.config import HubConfig
-            from knowledgehub.hub.query import HubQueryRequest, HubQueryService
+        try:
+            if body.knowledge_base != "literature":
+                from knowledgehub.hub.config import HubConfig
+                from knowledgehub.hub.query import HubQueryRequest, HubQueryService
 
-            response = HubQueryService(
-                HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
-            ).search(
-                HubQueryRequest(
-                    knowledge_base=body.knowledge_base,
-                    query=body.query,
-                    intent=body.intent,
-                    filters=body.filters,
-                    top_k=body.limit,
-                    prefetch_limit=body.prefetch_limit,
-                    mode=body.mode,
-                    return_mode=body.return_mode,
-                    reranker=body.reranker_profile if body.use_reranker else "off",
+                response = HubQueryService(
+                    HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+                ).search(
+                    HubQueryRequest(
+                        knowledge_base=body.knowledge_base,
+                        query=body.query,
+                        intent=body.intent,
+                        filters=body.filters,
+                        top_k=body.limit,
+                        prefetch_limit=body.prefetch_limit,
+                        mode=body.mode,
+                        return_mode=body.return_mode,
+                        reranker=body.reranker_profile if body.use_reranker else "off",
+                    )
                 )
+                return dataclasses.asdict(response)
+            response = holder["service"].search(
+                SearchRequest(**body.model_dump(exclude={"filters", "return_mode"}))
             )
-            return dataclasses.asdict(response)
-        response = holder["service"].search(
-            SearchRequest(**body.model_dump(exclude={"filters", "return_mode"}))
-        )
-        return {
-            **dataclasses.asdict(response),
-            "hits": [dataclasses.asdict(value) for value in response.hits],
-        }
+            return {
+                **dataclasses.asdict(response),
+                "hits": [dataclasses.asdict(value) for value in response.hits],
+            }
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.post("/knowledge/query")
-    def knowledge_query(
-        body: KnowledgeQueryBody, _: None = Depends(authorize)
-    ) -> dict[str, Any]:
+    def knowledge_query(body: KnowledgeQueryBody, _: None = Depends(authorize)) -> dict[str, Any]:
         from knowledgehub.hub.config import HubConfig
         from knowledgehub.hub.evidence import KnowledgeQueryService, QueryBudget
         from knowledgehub.hub.query import HubQueryRequest
@@ -180,28 +183,29 @@ def create_app(
         }.items():
             if value is not None:
                 filters[key] = value
-        config_value = HubConfig.load(
-            os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml")
-        )
-        return KnowledgeQueryService(config_value).query(
-            HubQueryRequest(
-                knowledge_base=body.knowledge_base,
-                query=body.query,
-                intent=body.intent,
-                filters=filters,
-                top_k=body.limit,
-                prefetch_limit=body.prefetch_limit,
-                mode=body.mode,
-                return_mode=body.return_mode,
-                reranker=body.reranker_profile if body.use_reranker else "off",
-            ),
-            QueryBudget(
-                max_results=body.limit,
-                max_tokens=body.max_tokens,
-                allow_auto_import=body.allow_auto_import,
-                allow_issues=body.allow_issues,
-            ),
-        )
+        config_value = HubConfig.load(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
+        try:
+            return KnowledgeQueryService(config_value).query(
+                HubQueryRequest(
+                    knowledge_base=body.knowledge_base,
+                    query=body.query,
+                    intent=body.intent,
+                    filters=filters,
+                    top_k=body.limit,
+                    prefetch_limit=body.prefetch_limit,
+                    mode=body.mode,
+                    return_mode=body.return_mode,
+                    reranker=body.reranker_profile if body.use_reranker else "off",
+                ),
+                QueryBudget(
+                    max_results=body.limit,
+                    max_tokens=body.max_tokens,
+                    allow_auto_import=body.allow_auto_import,
+                    allow_issues=body.allow_issues,
+                ),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     return app
 

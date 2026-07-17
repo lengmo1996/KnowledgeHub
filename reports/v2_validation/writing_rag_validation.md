@@ -2,30 +2,23 @@
 
 状态：**PASS_WITH_LIMITATIONS**
 
-## 独立派生
+## 修复后只读审计
 
-- 使用 3 篇固定论文和独立 `/tmp` 状态/collection。
-- Dry-run：87 entries/87 chunks。
-- 首次：87 indexed，6.76 s；第二次：87 skipped、0 indexed，2.11 s。
-- Candidate 完整性：87 state documents、87 artifacts、87 points、green；正式 Writing 保持 134/134。
-- 每条包含 source paper ID、section/location、processor/prompt version、pattern、usage notes；原文未覆盖。
+- 现有正式 manifest：5 papers、134 entries，来源/位置 provenance 缺失 0，重复 writing ID 0。
+- section family 修复后，现有 134 条中 128 条可分类；未分类由 71 降至 6，论文标题中的 `Approach` 仍不会误判为 Method。
+- 对相同 5 篇论文重新 dry-run：101 entries，严格 Figure/Table captions 0，title/front matter 0。
+- 20-paper dry-run：459 entries、19 papers 有有效条目，provenance 缺失 0、重复 writing ID 0。
+- 十个目标功能标签全部出现：background、motivation、research_gap、contribution_statement、method_overview、design_rationale、quantitative_comparison、result_interpretation、limitation、future_work。
+- 十类冻结 classifier fixture 全部通过。
 
-## 查询与质量
+因此 KH-V2-016、017、018 已按源码、回归和真实只读 dry-run 证据关闭。
 
-- 7 条指定中文场景均返回 pattern-first 结果、usage notes、source paper 和 bounded source excerpt。
-- Research gap 模式：`Although [prior progress...], [unresolved limitation...] remains.`
-- Result interpretation 模式：`The results indicate [finding], suggesting that [supported interpretation].`
-- 活动函数分布以 research_context/experimental_setup/method_overview/result_interpretation 等 V1 标签为主；任务中的 background 实际映射为 research_context。
-- 24-sample live evaluation：function recall=1.0、source traceability=1.0、duplicate material ratio=0、wrong-domain rate=0。
+## 相似度与查询
 
-## 相似度
+- CLI/MCP 使用配置的 Qwen3 embedding；重排改写 cosine=0.9625，返回 high，semantic=`evaluated`。
+- pattern-first 查询保留 source paper、section/location、usage notes 和 bounded excerpt。
+- 来源相似度明确标注为内部材料风险，不冒充法律意义的查重结论。
 
-- 直接复制：high，ngram overlap 0.8095，明确标注 internal source similarity、非法律查重。
-- 通用句：low，无误报。
-- 高度相似改写：low；semantic layer=`not_evaluated`，未满足任务要求。
+## 正式索引边界
 
-## 质量问题
-
-- Method filter 将标题含 `Approach` 的封面/作者行归为 Method，属于 section family 误判。
-- 少量 source excerpt 是 figure caption/作者行，pattern 虽完整但来源候选质量低。
-- 缺少显式 limitation/design_rationale/quantitative_comparison 等活动标签；不能声称十类均已真实覆盖。
+本轮没有构建、stage 或 promote Writing candidate。正式 Writing alias/manifest 仍是旧的 134 entries、rules-v1 数据；101-entry 清洗结果和新十类 taxonomy 只有 dry-run 证据。要让线上 Writing 检索实际使用新数据，仍需单独执行 candidate → validate → stage → promote，并在 promote 前对 43 条/十类评估回归。

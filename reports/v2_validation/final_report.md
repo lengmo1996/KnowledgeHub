@@ -1,5 +1,9 @@
 # KnowledgeHub V2 运行验证与稳定性验收报告
 
+> 本文件保留 2026-07-17 初轮验收的历史 `FAIL` 结论。P1-1 的代码修复、故障注入及真实 stage/promote/Snapshot 2.1/rollback/recovery 演练已于同日完成，KH-V2-003/KH-V2-004 已关闭。后续证据见 `p1_atomic_index_remediation.md`；不直接改写本历史结论。
+>
+> 2026-07-17 12:04 最新后续状态：KH-V2-001～018 已全部关闭，V2 稳定性阻塞项清零。全量 362 passed、Ruff 与 strict MyPy 通过。Search API 新 0.2.5 镜像的鉴权、OpenAPI、三库查询、两个 422 回归、8 路并发及重启恢复全部通过。Code 核心评估集 40 条的真实期望证据类型命中 35/40，版本/符号均 100%；另含 3 条 repository adaptation。Version Diff 默认 dry-run 覆盖两个真实 introduced symbol；Writing 20-paper/459-entry dry-run 覆盖十类 10/10。正式 Code/Writing alias 均未因这些后续验证而切换。初轮历史 `FAIL` 仅作为审计记录保留，当前状态以 `remaining_risk_remediation.md` 为准。
+
 ## 1. 执行摘要
 
 - 最终状态：**FAIL**

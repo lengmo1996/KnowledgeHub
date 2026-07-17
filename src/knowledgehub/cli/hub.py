@@ -16,6 +16,7 @@ from knowledgehub.code_rag.maintenance import OnDemandVersionImporter, ReleaseWa
 from knowledgehub.code_rag.registry import CodeSourceRegistry
 from knowledgehub.code_rag.sync import CodeSyncService
 from knowledgehub.governance.maintenance import SyncPlanner
+from knowledgehub.governance.releases import CandidateReleaseManager
 from knowledgehub.governance.tasks import TaskExecutor, TaskStore, default_task_store_path
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.hub.query import (
@@ -76,6 +77,12 @@ def add_hub_parsers(subparsers: Any) -> None:
     build_commands = build.add_subparsers(dest="build_domain", required=True)
     build_code = build_commands.add_parser("code")
     build_code.add_argument("--library", default="transformers")
+    build_code.add_argument("--all", action="store_true")
+    build_code.add_argument(
+        "--allow-source-expansion",
+        action="store_true",
+        help="Make an all-source candidate promotion eligible despite active scope growth",
+    )
     build_code.add_argument("--version")
     build_code.add_argument("--incremental", action="store_true")
     build_code.add_argument("--limit", type=int)
@@ -410,58 +417,160 @@ def run_hub_command(args: argparse.Namespace) -> int:
                     diff_service.close()
                 _emit(diff_result)
                 return 0 if diff_result["status"] == "success" else 1
-            if args.candidate_collection:
-                if args.candidate_collection == config.knowledge_bases["code"].collection:
-                    raise ValueError(
-                        "candidate collection must differ from the configured production collection"
-                    )
-                rag_config = rag_config.with_overrides(qdrant_collection=args.candidate_collection)
-            build_service = CodeBuildService(registry, config.code.data_root, rag_config)
-            try:
-                def build_operation() -> dict[str, Any]:
-                    return build_service.build(
-                        args.library,
-                        version=args.version,
-                        limit=args.limit,
-                        dry_run=False,
-                        prune=args.prune,
-                        normalized_namespace=args.candidate_collection,
-                    )
+            if args.all and (args.version is not None or args.limit is not None):
+                raise ValueError("--all cannot be combined with --version or --limit")
+            if args.all and args.prune:
+                raise ValueError("a fresh --all candidate does not support --prune")
+            if args.allow_source_expansion and not args.all:
+                raise ValueError("--allow-source-expansion requires --all")
+            names = (
+                [item.name for item in registry.list(enabled_only=True)]
+                if args.all
+                else [args.library]
+            )
 
-                if args.dry_run:
-                    build_result = build_service.build(
-                        args.library,
-                        version=args.version,
-                        limit=args.limit,
-                        dry_run=True,
-                        prune=args.prune,
-                        normalized_namespace=args.candidate_collection,
+            def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
+                return {
+                    "status": (
+                        "success"
+                        if all(item.get("status") == "success" for item in results)
+                        else "failed"
+                    ),
+                    "libraries": names,
+                    "selected": sum(int(item.get("selected") or 0) for item in results),
+                    "indexed": sum(int(item.get("indexed") or 0) for item in results),
+                    "skipped": sum(int(item.get("skipped") or 0) for item in results),
+                    "chunks": sum(int(item.get("chunks") or 0) for item in results),
+                    "failures": [
+                        failure
+                        for item in results
+                        for failure in item.get("failures", ())
+                    ],
+                    "build_results": results,
+                }
+
+            if args.dry_run:
+                build_service = CodeBuildService(registry, config.code.data_root, rag_config)
+                try:
+                    build_result = aggregate(
+                        [
+                            build_service.build(
+                                name,
+                                version=args.version,
+                                limit=args.limit,
+                                dry_run=True,
+                                prune=args.prune,
+                            )
+                            for name in names
+                        ]
                     )
-                else:
-                    build_result = _task_executor().execute(
-                        "code_build",
-                        build_operation,
-                        knowledge_base="code",
-                        library=args.library,
-                        version=args.version,
-                        inputs={
-                            "candidate_collection": args.candidate_collection,
-                            "incremental": args.incremental,
+                finally:
+                    build_service.close()
+            else:
+                candidate = str(args.candidate_collection or "")
+                production = config.knowledge_bases["code"].collection
+                if not candidate:
+                    raise ValueError(
+                        "direct production builds are disabled; pass --candidate-collection"
+                    )
+                if candidate in {production, "knowledgehub_code_current"}:
+                    raise ValueError(
+                        "candidate collection must differ from production and the stable alias"
+                    )
+                release_manager = CandidateReleaseManager(
+                    config.code.data_root / "releases"
+                )
+
+                def build_operation() -> dict[str, Any]:
+                    layout = release_manager.prepare(
+                        "code",
+                        candidate,
+                        build_scope={
+                            "all_libraries": args.all,
+                            "libraries": names,
+                            "version": args.version,
                             "limit": args.limit,
+                            "incremental": args.incremental,
                             "prune": args.prune,
+                            "allow_source_expansion": args.allow_source_expansion,
                         },
-                        input_manifest=str(config.code.registry),
-                        lock_keys=(
-                            f"library:{args.library}",
-                            f"index:code:{rag_config.qdrant_collection}",
+                        embedding={
+                            "model": rag_config.embedding_model,
+                            "revision": rag_config.embedding_revision,
+                            "dimension": rag_config.embedding_dim,
+                            "sparse": rag_config.sparse_model,
+                        },
+                        promotion_eligible=bool(
+                            args.all
+                            and args.version is None
+                            and args.limit is None
+                            and not args.incremental
+                            and not args.prune
+                            and args.allow_source_expansion
                         ),
-                        output_manifest=lambda result: str(
-                            result.get("normalized_manifest") or ""
-                        )
-                        or None,
                     )
-            finally:
-                build_service.close()
+                    candidate_config = rag_config.with_overrides(
+                        data_dir=layout.rag_data_dir,
+                        qdrant_collection=candidate,
+                    )
+                    service = CodeBuildService(
+                        registry,
+                        config.code.data_root,
+                        candidate_config,
+                        candidate_release=layout,
+                    )
+                    try:
+                        result = aggregate(
+                            [
+                                service.build(
+                                    name,
+                                    version=args.version,
+                                    limit=args.limit,
+                                    dry_run=False,
+                                    prune=args.prune,
+                                )
+                                for name in names
+                            ]
+                        )
+                        release = release_manager.record_build(
+                            layout, result["build_results"]
+                        )
+                    except BaseException as error:
+                        release_manager.record_failure(layout, error)
+                        raise
+                    return {
+                        **result,
+                        "candidate_collection": candidate,
+                        "candidate_data_dir": str(layout.rag_data_dir),
+                        "release_manifest": str(layout.manifest_path),
+                        "release_status": release["status"],
+                        "promotion_eligible": release["promotion_eligible"],
+                    }
+
+                build_result = _task_executor().execute(
+                    "code_build",
+                    build_operation,
+                    knowledge_base="code",
+                    library=None if args.all else args.library,
+                    version=args.version,
+                    inputs={
+                        "all_libraries": args.all,
+                        "candidate_collection": candidate,
+                        "incremental": args.incremental,
+                        "limit": args.limit,
+                        "prune": args.prune,
+                        "allow_source_expansion": args.allow_source_expansion,
+                    },
+                    input_manifest=str(config.code.registry),
+                    lock_keys=(
+                        *(f"library:{name}" for name in names),
+                        f"index:code:{candidate}",
+                    ),
+                    output_manifest=lambda result: str(
+                        result.get("release_manifest") or ""
+                    )
+                    or None,
+                )
             _emit(build_result)
             return 0 if build_result["status"] == "success" else 1
         if args.source == "derive":
