@@ -53,6 +53,14 @@ protocol without changing stored entries.
 See [Code RAG](docs/code_rag.md), [Writing RAG](docs/writing_rag.md),
 [data sources](docs/data_sources.md), and [Skill integration](docs/skill_integration.md).
 
+## V3 project workspace fixture
+
+V3 validates the project Workspace and experiment-knowledge loop with the isolated
+`fixture-vision-project`. The real-project Pilot is intentionally deferred until a suitable
+research repository exists. When one is available, follow the gated, read-only procedure in
+[the Chinese real-project Pilot guide](docs/guides/REAL_PROJECT_PILOT.zh-CN.md); do not point a
+real repository at `state/fixtures` or the fixture-only project router.
+
 ## V2 release
 
 V2 is frozen as package `0.2.0`. Validate its machine-readable release

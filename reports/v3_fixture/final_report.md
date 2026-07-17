@@ -6,7 +6,11 @@
 
 V3 Fixture 的 Workspace→Environment→Experiment→Failure/Decision→Context→Cross-RAG→Claim→Skill→Isolation/Cleanup 闭环已实际完成。跨库阶段按任务要求只验证隔离 Fixture 的接口和路由，不把模拟数据写入正式向量 Collection；项目查询和四个 Skill 已同时接入 CLI/service 与现有 MCP registry。
 
-下一阶段状态：**READY_FOR_REAL_PROJECT_PILOT**。
+下一阶段状态：**PILOT_DEFERRED_NO_REAL_PROJECT**。架构具备进入受控 Pilot 的条件，
+但当前没有真实项目，且 `129272a` 的 Registry/Router 仍保持 Fixture-only 安全边界。
+真实项目出现后必须按
+[`docs/guides/REAL_PROJECT_PILOT.zh-CN.md`](../../docs/guides/REAL_PROJECT_PILOT.zh-CN.md)
+逐 Gate 执行；不得直接把真实仓库指向 Fixture Registry。
 
 ## 2. V2 准入
 
@@ -71,7 +75,11 @@ V3 Fixture 的 Workspace→Environment→Experiment→Failure/Decision→Context
 
 ## 9. 是否可接入真实科研项目
 
-**可以进入受控真实项目 Pilot。** Pilot 必须只读、非生产、使用独立状态根并由用户显式选择目标仓库；不得自动训练、清理或修改用户仓库。该结论不是允许直接把现有 Fixture Registry 指向用户研究目录。
+**架构评估允许进入受控真实项目 Pilot，但本轮按用户要求延期。** Pilot 必须只读、
+非生产、使用独立状态根并由用户显式选择目标仓库；不得自动训练、清理或修改用户仓库。
+当前公开 CLI 的 Registry 和 Router 仍是 Fixture-only，因此在真实项目出现后要先完成手册中的
+“真实 Pilot 支持启用”代码门禁，再创建 project Workspace。该结论不是允许直接把现有
+Fixture Registry 指向用户研究目录。
 
 ## 10. 未实际执行或无法验证
 
@@ -80,3 +88,10 @@ V3 Fixture 的 Workspace→Environment→Experiment→Failure/Decision→Context
 - 未验证跨主机/分布式并发；单机 `flock` 竞争已验证；
 - 未使用真实论文、真实研究仓库、真实数据、GPU 或网络；
 - 未证明 Fixture 结果对任何真实视觉任务有效。
+
+## 11. 延期 Pilot 的可执行交接
+
+真实项目建立后的完整顺序、复制即用的预检/服务/Intake/RAG/MCP 命令、代码门禁、停止条件、
+验收表和归档步骤已写入
+[`docs/guides/REAL_PROJECT_PILOT.zh-CN.md`](../../docs/guides/REAL_PROJECT_PILOT.zh-CN.md)。
+在没有真实项目期间不再创建替代性“真实”数据，也不扩大 Fixture 的权限边界。
