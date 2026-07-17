@@ -1,6 +1,6 @@
 # KnowledgeHub MCP 工具参考
 
-MCP 共提供 15 个 closed-world 工具，并返回 `structuredContent` 与紧凑 text fallback。除
+MCP 共提供 17 个 closed-world 工具，并返回 `structuredContent` 与紧凑 text fallback。除
 `knowledge_submit_feedback` 外均为只读、幂等；所有对象 schema 都拒绝未知字段。响应中的文档文本带有：
 
 ```json
@@ -85,3 +85,14 @@ HMAC key、上游 API key 或原始异常内容。
 - `knowledge_submit_feedback`：显式写入 Writing feedback SQLite，允许 useful、not_useful、
   too_generic、too_similar、wrong_function、wrong_domain、poor_style；该调用非幂等但不修改
   Writing Entry 或论文原文。
+
+## V3 项目工具
+
+- `knowledge_project_query`：按 project_overview、code_debugging、experiment_analysis、
+  decision_review 或 academic_writing 构建预算化 Workspace 上下文，并只读路由 Fixture
+  Literature/Code/Writing 证据；
+- `knowledge_project_skill`：执行只读的 code-debugging、research-result-analysis、
+  research-decision-review 或 writing-academic 项目工作流，不修改 Workspace、实验或源码。
+
+状态根与 Fixture 根只由服务端 `KH_PROJECT_STATE_ROOT` 和 `KH_PROJECT_FIXTURE_ROOT` 配置；调用方
+不能传入路径。两项工具都拒绝未知字段并受 MCP 最终响应大小限制。

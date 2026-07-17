@@ -218,6 +218,36 @@ class SubmitFeedbackInput(StrictModel):
     context: FeedbackContext = Field(default_factory=FeedbackContext)
 
 
+class ProjectQueryInput(StrictModel):
+    workspace_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{2,79}$")
+    task: Literal[
+        "project_overview",
+        "code_debugging",
+        "experiment_analysis",
+        "decision_review",
+        "academic_writing",
+    ]
+    query: str = Field(min_length=1, max_length=4000)
+    experiment_ids: tuple[str, ...] = Field(default=(), max_length=20)
+    max_records: int = Field(default=20, ge=1, le=100)
+    max_characters: int = Field(default=12000, ge=256, le=120000)
+
+
+class ProjectSkillInput(StrictModel):
+    skill: Literal[
+        "code-debugging",
+        "research-result-analysis",
+        "research-decision-review",
+        "writing-academic",
+    ]
+    workspace_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{2,79}$")
+    experiment_ids: tuple[str, ...] = Field(default=(), max_length=20)
+    section: str = Field(default="Results", min_length=1, max_length=128)
+    writing_function: str = Field(
+        default="experimental_comparison", min_length=1, max_length=128
+    )
+
+
 INPUT_MODELS: dict[str, type[StrictModel]] = {
     "rag_search": SearchInput,
     "knowledge_query": KnowledgeQueryInput,
@@ -234,4 +264,6 @@ INPUT_MODELS: dict[str, type[StrictModel]] = {
     "knowledge_compare_symbols": CompareSymbolsInput,
     "knowledge_analyze_repository": AnalyzeRepositoryInput,
     "knowledge_submit_feedback": SubmitFeedbackInput,
+    "knowledge_project_query": ProjectQueryInput,
+    "knowledge_project_skill": ProjectSkillInput,
 }

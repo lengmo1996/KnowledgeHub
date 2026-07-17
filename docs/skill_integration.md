@@ -122,3 +122,22 @@ When serving MCP outside Literature-only mode, set `KH_HUB_CONFIG` to the local
 catalog path and ensure the separate Code/Writing collections and embedding
 endpoint are available. Set `KH_REPOSITORY_ROOT` before enabling repository
 inspection. All tools except explicit feedback submission remain read-only.
+
+For V3 project-aware Skills, `knowledge_project_query` is the preferred context entry point:
+
+```json
+{
+  "workspace_id": "fixture-vision-project",
+  "task": "experiment_analysis",
+  "query": "Compare addition and concatenation fusion.",
+  "experiment_ids": ["fixture-vision-exp-002", "fixture-vision-exp-003"],
+  "max_records": 20,
+  "max_characters": 12000
+}
+```
+
+`knowledge_project_skill` exposes the bounded read-only workflows `code-debugging`,
+`research-result-analysis`, `research-decision-review`, and `writing-academic`. The server
+operator selects `KH_PROJECT_STATE_ROOT` and `KH_PROJECT_FIXTURE_ROOT`; callers cannot supply
+filesystem roots. Project tools reject unknown fields, preserve Fixture namespace isolation,
+and never execute experiments or cleanup.

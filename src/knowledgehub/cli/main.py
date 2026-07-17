@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from knowledgehub.cli.hub import add_hub_parsers, run_hub_command
+from knowledgehub.cli.project import add_project_parsers, run_project_command
 from knowledgehub.cli.rag import add_rag_parser, run_rag_command
 from knowledgehub.cli.v2 import add_v2_parsers, run_v2_command
 from knowledgehub.mcp.cli import add_mcp_parser, run_mcp_command
@@ -29,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_mcp_parser(subparsers)
     add_hub_parsers(subparsers)
     add_v2_parsers(subparsers)
+    add_project_parsers(subparsers)
     return parser
 
 
@@ -56,6 +58,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "release",
     }:
         return run_v2_command(args)
+    if args.source in {"workspace", "fixture", "project"}:
+        return run_project_command(args)
     parser.error(f"Unsupported source: {args.source}")
 
 

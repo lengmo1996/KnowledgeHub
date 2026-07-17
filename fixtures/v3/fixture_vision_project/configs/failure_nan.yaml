@@ -1,0 +1,9 @@
+name: failure_nan
+fusion: addition
+seed: 42
+samples: 240
+input_dim: 4
+hidden_dim: 6
+epochs: 30
+learning_rate: 0.08
+inject_nan: true

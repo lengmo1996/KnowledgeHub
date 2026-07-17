@@ -104,6 +104,8 @@ TOOL_DESCRIPTIONS = {
     "knowledge_compare_symbols": "Compare one Python symbol across two indexed library versions.",
     "knowledge_analyze_repository": "Statically inspect an allowed local repository without executing or modifying it.",
     "knowledge_submit_feedback": "Record explicit quality feedback for one derived writing pattern.",
+    "knowledge_project_query": "Build budgeted project context and route read-only fixture knowledge evidence by task.",
+    "knowledge_project_skill": "Run a read-only project debugging, result-analysis, decision-review, or academic-writing workflow.",
 }
 
 
@@ -146,6 +148,8 @@ class ToolRegistry:
             "knowledge_compare_symbols": self._compare_symbols,
             "knowledge_analyze_repository": self._analyze_repository,
             "knowledge_submit_feedback": self._submit_feedback,
+            "knowledge_project_query": self._project_query,
+            "knowledge_project_skill": self._project_skill,
         }
 
     def definitions(self) -> list[types.Tool]:
@@ -518,6 +522,71 @@ class ToolRegistry:
                 config.writing.data_root / "derived" / "writing_entries.jsonl"
             ),
         )
+        return {"ok": True, "result": result}
+
+    async def _project_query(self, value: Any) -> dict[str, Any]:
+        from knowledgehub.project.context import ProjectContextBuilder
+        from knowledgehub.project.knowledge import FixtureKnowledgeRouter, ProjectQueryService
+        from knowledgehub.project.models import ContextBudget
+        from knowledgehub.project.registry import ProjectRegistry
+
+        state_root = Path(os.environ.get("KH_PROJECT_STATE_ROOT", "state/fixtures"))
+        fixture_root = Path(
+            os.environ.get(
+                "KH_PROJECT_FIXTURE_ROOT", "fixtures/v3/fixture_vision_project"
+            )
+        )
+
+        def query() -> dict[str, Any]:
+            registry = ProjectRegistry(state_root)
+            service = ProjectQueryService(
+                ProjectContextBuilder(registry), FixtureKnowledgeRouter(fixture_root)
+            )
+            return service.query(
+                value.workspace_id,
+                value.task,
+                value.query,
+                experiment_ids=tuple(value.experiment_ids),
+                budget=ContextBudget(
+                    max_records=value.max_records,
+                    max_characters=value.max_characters,
+                    experiment_ids=tuple(value.experiment_ids),
+                ),
+            )
+
+        # Project fixture reads are bounded by the strict schema and local
+        # character/record budgets. Keeping this synchronous also avoids a
+        # nested worker-thread handoff inside MCP's own AnyIO request worker.
+        result = query()
+        return {"ok": True, "result": result}
+
+    async def _project_skill(self, value: Any) -> dict[str, Any]:
+        from knowledgehub.project.context import ProjectContextBuilder
+        from knowledgehub.project.knowledge import FixtureKnowledgeRouter, ProjectQueryService
+        from knowledgehub.project.registry import ProjectRegistry
+        from knowledgehub.project.skills import ProjectSkillService
+
+        state_root = Path(os.environ.get("KH_PROJECT_STATE_ROOT", "state/fixtures"))
+        fixture_root = Path(
+            os.environ.get(
+                "KH_PROJECT_FIXTURE_ROOT", "fixtures/v3/fixture_vision_project"
+            )
+        )
+
+        def run_skill() -> dict[str, Any]:
+            registry = ProjectRegistry(state_root)
+            query_service = ProjectQueryService(
+                ProjectContextBuilder(registry), FixtureKnowledgeRouter(fixture_root)
+            )
+            return ProjectSkillService(registry, query_service).run(
+                value.skill,
+                value.workspace_id,
+                experiment_ids=tuple(value.experiment_ids),
+                section=value.section,
+                writing_function=value.writing_function,
+            )
+
+        result = run_skill()
         return {"ok": True, "result": result}
 
     async def _get_chunk(self, value: Any) -> dict[str, Any]:
