@@ -29,6 +29,8 @@ venv/
 !/state/
 !/state/releases/
 !/state/releases/v1_manifest.json
+# V3 fixture workspaces, run records, locks, and cleanup manifests are reproducible runtime data.
+/state/fixtures/
 /raw/
 /extracted/
 /manifests/
