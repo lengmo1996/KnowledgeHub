@@ -8,7 +8,9 @@ import pytest
 from knowledgehub.core.hashing import sha256_json
 from knowledgehub.writing_rag.pilot import (
     AcceptedCorpusQualityAuditor,
+    AcceptedCorpusQualityReviewRenderer,
     QualityAuditPolicy,
+    _deduplicate_text_segments,
     _normalized_quality_text,
     _quality_findings,
 )
@@ -130,3 +132,118 @@ def test_quality_normalization_is_unicode_and_whitespace_stable() -> None:
         _normalized_quality_text("\uff21\uff22\uff23\u3000Template\nText")
         == "abc template text"
     )
+
+
+def test_quality_cleanup_removes_repeated_and_truncated_tail_segments() -> None:
+    complete = "Use calibrated language rather than unsupported superlatives."
+    value = f"{complete} Keep the evidence scope explicit. {complete} Use calibrated language"
+
+    cleaned = _deduplicate_text_segments(value, QualityAuditPolicy())
+
+    assert cleaned == f"{complete} Keep the evidence scope explicit."
+
+
+def test_quality_review_packet_proposes_edits_without_changing_review_state(
+    tmp_path: Path,
+) -> None:
+    review, run_id = _reviewed_run(tmp_path)
+    run_dir = review.run_dir(run_id)
+    raw_template = review._records(run_dir)["template"][0]
+    repeated_segment = "This guidance sentence is deliberately repeated for review."
+    decision = {
+        "asset_id": raw_template["template_id"],
+        "decision": "edited",
+        "based_on_hash": sha256_json(raw_template),
+        "reviewer": "fixture-reviewer",
+        "reason": "create a bounded quality fixture",
+        "edits": {
+            "claim_strength_guidance": " ".join([repeated_segment] * 3),
+        },
+    }
+    decision_path = tmp_path / "quality-fixture-decision.jsonl"
+    decision_path.write_text(json.dumps(decision) + "\n", encoding="utf-8")
+    review.apply(run_id, decision_path)
+    audit = AcceptedCorpusQualityAuditor(review).audit(run_id)
+    assert audit["counts"]["findings"] == {"repeated_text_segment": 1}
+    evidence = json.loads(
+        (run_dir / "accepted" / "evidence.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[0]
+    )
+    original_text = evidence["original_text"]
+    protected_paths = [
+        run_dir / "review-events.jsonl",
+        *(path for path in (run_dir / "accepted").iterdir() if path.is_file()),
+    ]
+    before = {str(path): path.read_bytes() for path in protected_paths}
+
+    output_dir = tmp_path / "quality-review"
+    packet = AcceptedCorpusQualityReviewRenderer(review).render(
+        run_id,
+        quality_report=audit,
+        reviewer="lengmo",
+        output_dir=output_dir,
+    )
+
+    assert packet["status"] == "success"
+    assert packet["counts"] == {
+        "flagged_assets": 1,
+        "recommendations": {"edit_repeated_content": 1},
+    }
+    assert packet["decision_import_ready"] is False
+    assert packet["requires_explicit_reviewer_decision"] is True
+    assert packet["evidence_text_included"] is False
+    assert packet["provenance_excerpt_included"] is False
+    assert packet["derived_material_text_included"] is True
+    assert packet["review_decisions_modified"] is False
+    assert packet["accepted_snapshot_modified"] is False
+    assert packet["index_modified"] is False
+    assert packet["llm_called"] is False
+    item = packet["items"][0]
+    assert item["recommended_action"] == "edit_repeated_content"
+    assert item["decision_draft"]["decision"] is None
+    assert item["decision_draft"]["reason"] is None
+    proposed = item["proposed_edits"]["claim_strength_guidance"]
+    assert proposed.count(repeated_segment) == 1
+    assert packet["artifact_fingerprint"] == sha256_json(
+        {key: value for key, value in packet.items() if key != "artifact_fingerprint"}
+    )
+    packet_path = output_dir / "quality-review-packet.json"
+    markdown_path = output_dir / "quality-review.md"
+    assert oct(output_dir.stat().st_mode & 0o777) == "0o700"
+    assert oct(packet_path.stat().st_mode & 0o777) == "0o600"
+    assert oct(markdown_path.stat().st_mode & 0o777) == "0o600"
+    assert original_text not in packet_path.read_text(encoding="utf-8")
+    assert original_text not in markdown_path.read_text(encoding="utf-8")
+    after = {str(path): path.read_bytes() for path in protected_paths}
+    assert after == before
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        AcceptedCorpusQualityReviewRenderer(review).render(
+            run_id,
+            quality_report=audit,
+            reviewer="lengmo",
+            output_dir=output_dir,
+        )
+
+
+def test_quality_review_packet_rejects_tampered_or_unknown_findings(tmp_path: Path) -> None:
+    review, run_id = _reviewed_run(tmp_path)
+    audit = AcceptedCorpusQualityAuditor(review).audit(run_id)
+    assert audit["passed"] is True
+    with pytest.raises(ValueError, match="valid failed quality audit"):
+        AcceptedCorpusQualityReviewRenderer(review).render(
+            run_id,
+            quality_report=audit,
+            reviewer="lengmo",
+            output_dir=tmp_path / "clean-report",
+        )
+
+    tampered = dict(audit)
+    tampered["passed"] = False
+    with pytest.raises(ValueError, match="fingerprint"):
+        AcceptedCorpusQualityReviewRenderer(review).render(
+            run_id,
+            quality_report=tampered,
+            reviewer="lengmo",
+            output_dir=tmp_path / "tampered-report",
+        )

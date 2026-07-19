@@ -708,4 +708,19 @@ Phase 7A/7B 已形成闭环。生产 Writing alias 已部署并保留 rollback f
 
 设计偏差：此前 pilot gate 只度量检索结果内重复，不审计 accepted corpus 本身；本阶段补充 corpus-level report，但没有把它追溯加入已经完成的 Phase 7 release manifest，也没有自动回滚当前 production alias。原因是发现项包含需人工判断的低分/near-duplicate warning，不能用新规则静默覆盖用户已接受的材料。
 
-下一阶段为 Phase 8B：基于36个 flagged asset 生成不含 evidence 原文的人工复核包，分别提出 keep/edit/reject 建议；只有 reviewer 显式决定后，才生成新的 complete accepted projection、隔离 candidate 和 release。当前30篇范围继续不扩量。
+### Phase 8B：flagged asset 人工复核包（2026-07-19）
+
+1. [x] 新增 `AcceptedCorpusQualityReviewRenderer` 和 `writing-material-quality-review-packet-v1`；严格复验 quality audit fingerprint、run ID、accepted manifest SHA、failed gate、安全字段与finding计数。
+2. [x] 新增 `writing-material pilot render-quality-review --run-id --audit-report --reviewer --output-dir`；拒绝覆盖已有目录，输出0700目录、0600 JSON packet与Markdown。
+3. [x] 每项绑定 immutable run asset `based_on_hash`；包内允许派生material字段用于判断，但不含evidence原文、provenance excerpt或evidence IDs。
+4. [x] 所有 `decision_draft.decision/reason` 默认 `null`，`decision_import_ready=false`；生成器不调用 `review apply`，不追加event，不重写accepted，不修改index。
+5. [x] 对 repeated segment 生成确定性去重 edit，并移除末尾已见句子的截断前缀；near-duplicate建议compare后keep/reject；低分建议人工keep/edit/reject；单纯超长建议keep/edit。
+6. [x] 当前36项v2包：6 `edit_repeated_content`、4 `compare_cluster_then_keep_or_reject`、8 `manual_keep_edit_or_reject`、18 `manual_keep_or_edit`。packet fingerprint `e708ad9a6e2cca6bdada5a5370b24b4466bb78c3787b11925eb014595aaaae50`。
+7. [x] 实际输出 `/tmp/knowledgehub-writing-material-phase6b-20260718/quality-review-v2-20260719T064746Z-f99463512f16/`；完整evidence `original_text` 对JSON/Markdown的contains检查为false，全部36项decision均未设置。
+8. [x] 测试覆盖fingerprint、非法/clean audit拒绝、只读状态、权限、隐私、建议分类、重复/截断清理与拒绝覆盖；全仓pytest 542 passed、Ruff passed、mypy 129 source files passed。
+
+实施偏差：初次包 `quality-review-20260719T064746Z-f99463512f16` 暴露“去重后保留截断句前缀”的边界，作为诊断历史保留但不采用；修复后生成新目录v2，未覆盖v1。另发现现有review event虽然append-only，但`materialize()`会重写同名`accepted/`投影；因此本阶段刻意不应用任何二次决定。
+
+实际修改文件：`src/knowledgehub/writing_rag/pilot.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_quality_audit.py`、`tests/writing_material/test_extract_review.py`、设计文档、pilot runbook、本计划与审计补充。
+
+下一阶段为 Phase 8C：先实现不可覆盖的版本化 accepted projection 与显式二次审核导入，再由 reviewer `lengmo` 对36项填写决定。没有显式决定前不构建新candidate、不stage/promote；当前30篇范围继续不扩量。

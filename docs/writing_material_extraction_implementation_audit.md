@@ -432,3 +432,16 @@ Zotero Web API metadata + Nutstore WebDAV attachment mirror
 | `python -m mypy src` | passed，129 source files |
 
 没有调用 LLM、没有扩大selection、没有修改evidence、review events、accepted snapshot、Qdrant collection/alias、manifest或cache。现阶段不自动回滚或过滤生产结果；下一阶段先生成36项人工复核包，任何 edit/reject 和新 release 都必须保持 append-only 审核与显式 reviewer 决定。
+
+## 18. Phase 8B 人工复核包复审（2026-07-19）
+
+- **IMPLEMENTED + VERIFIED**：fingerprinted `writing-material-quality-review-packet-v1`，绑定quality audit、accepted manifest和immutable run asset `based_on_hash`。
+- **IMPLEMENTED + VERIFIED**：0700 reviewer-local目录、0600 JSON/Markdown；包可显示派生material，但不含evidence原文/provenance excerpt。
+- **IMPLEMENTED + VERIFIED**：6项重复内容提供去重edit草稿；4项cluster建议比较后keep/reject；8项低分建议人工keep/edit/reject；18项超长项建议keep/edit。
+- **SAFE BY CONSTRUCTION**：36项decision/reason全部为null，`decision_import_ready=false`；没有调用review apply或修改任何审核/索引状态。
+
+采用的v2 packet fingerprint为 `e708ad9a6e2cca6bdada5a5370b24b4466bb78c3787b11925eb014595aaaae50`，路径 `/tmp/knowledgehub-writing-material-phase6b-20260718/quality-review-v2-20260719T064746Z-f99463512f16/`。对1523条accepted evidence的完整`original_text`执行JSON/Markdown contains检查，结果为false。
+
+第一次v1包发现确定性清理会保留位于字段末尾的已见句子截断前缀；修复规则后使用新目录生成v2，v1未覆盖或删除。全仓验证：pytest 542 passed、Ruff passed、mypy 129 source files passed。
+
+新的实现约束：当前review events为append-only，但complete projection固定写入`accepted/`，后续event materialization会覆盖该目录。二次审核导入前必须先实现versioned accepted projection；否则不能满足“不覆盖历史人工审核结果”。因此本阶段只生成不可导入草稿，生产alias仍为green/1107且未变化。

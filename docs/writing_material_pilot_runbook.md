@@ -161,6 +161,20 @@ knowledgehub writing-material pilot audit-quality \
 
 默认 policy：quality score 至少0.75；同一字段片段最多重复2次；受审字段最多800字符；lexical cluster 默认只允许单成员。阈值完整写入报告，调整阈值必须产生新的 fingerprinted report。
 
+对 `passed=false` 的报告生成 reviewer-local 复核包：
+
+```text
+knowledgehub writing-material pilot render-quality-review \
+  --run-id RUN_ID \
+  --audit-report /tmp/writing-material-quality-audit.json \
+  --reviewer REVIEWER \
+  --output-dir /tmp/writing-material-quality-review
+```
+
+新目录必须不存在；生成器创建0700目录和两个0600文件：`quality-review.md` 供人工阅读，`quality-review-packet.json` 保存 fingerprint、`based_on_hash`、findings、建议动作和可选确定性 edit 草稿。包中允许包含派生 material 字段，但不包含 evidence 原文或 provenance excerpt。所有 `decision_draft.decision` 与 `reason` 默认为 `null`，`decision_import_ready=false`，因此不能直接传给 `review apply`。
+
+重复片段只提出去重 edit；末尾如果是已出现句子的截断前缀会一并移除。near-duplicate 只建议比较后 keep/reject，低分和单纯超长项保留人工判断。生成复核包不会追加 review event、重写 accepted projection 或修改索引。
+
 ## 5. 默认停止条件
 
 - selection 不在 30–50 篇；

@@ -170,6 +170,24 @@ def test_release_and_pilot_cli_commands_keep_explicit_safety_inputs() -> None:
     )
     assert quality.writing_material_pilot_command == "audit-quality"
     assert quality.output == Path("quality.json")
+    quality_review = parser.parse_args(
+        [
+            "writing-material",
+            "pilot",
+            "render-quality-review",
+            "--run-id",
+            "run-1",
+            "--audit-report",
+            "quality.json",
+            "--reviewer",
+            "lengmo",
+            "--output-dir",
+            "quality-review",
+        ]
+    )
+    assert quality_review.writing_material_pilot_command == "render-quality-review"
+    assert quality_review.reviewer == "lengmo"
+    assert quality_review.output_dir == Path("quality-review")
     extraction = parser.parse_args(
         [
             "writing-material",

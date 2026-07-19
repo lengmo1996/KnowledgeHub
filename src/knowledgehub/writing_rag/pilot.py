@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from knowledgehub.core.atomic import atomic_write_json
+from knowledgehub.core.atomic import atomic_write_json, atomic_write_text
 from knowledgehub.core.hashing import sha256_json, sha256_text
 from knowledgehub.writing_rag.extract import (
     EXTRACTION_DRY_RUN_SCHEMA_VERSION,
@@ -34,6 +34,7 @@ RETRIEVAL_CASE_SCHEMA_VERSION = "writing-material-retrieval-case-v1"
 RETRIEVAL_REPORT_SCHEMA_VERSION = "writing-material-retrieval-evaluation-v1"
 PROVIDER_PREFLIGHT_SCHEMA_VERSION = "writing-material-provider-preflight-v2"
 QUALITY_AUDIT_SCHEMA_VERSION = "writing-material-quality-audit-v1"
+QUALITY_REVIEW_PACKET_SCHEMA_VERSION = "writing-material-quality-review-packet-v1"
 
 _QUALITY_TEXT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "strategy": (
@@ -805,6 +806,149 @@ class AcceptedCorpusQualityAuditor:
         return report
 
 
+class AcceptedCorpusQualityReviewRenderer:
+    """Render a non-importable local review packet for quality findings."""
+
+    def __init__(self, review: WritingMaterialReviewService) -> None:
+        self.review = review
+
+    def render(
+        self,
+        run_id: str,
+        *,
+        quality_report: Mapping[str, Any],
+        reviewer: str,
+        output_dir: Path,
+    ) -> dict[str, Any]:
+        if not reviewer.strip() or len(reviewer.strip()) > 200:
+            raise ValueError("quality review packet reviewer is invalid")
+        if output_dir.exists():
+            raise ValueError(f"refusing to overwrite quality review output: {output_dir}")
+        validation = self.review.validate(run_id, verify_source=True)
+        if validation.get("status") != "success" or not validation.get("index_eligible"):
+            raise ValueError("quality review packet requires a source-verified complete review")
+        run_dir = self.review.run_dir(run_id)
+        accepted_dir = run_dir / "accepted"
+        manifest_path = accepted_dir / "manifest.json"
+        manifest_hash = sha256_text(manifest_path.read_text(encoding="utf-8"))
+        policy = _validate_quality_audit_report(
+            quality_report,
+            run_id=run_id,
+            accepted_manifest_sha256=manifest_hash,
+        )
+
+        filenames = {
+            "strategy": "strategies.jsonl",
+            "template": "templates.jsonl",
+            "phrase": "phrases.jsonl",
+        }
+        accepted_assets: dict[str, tuple[str, dict[str, Any]]] = {}
+        raw_assets: dict[str, dict[str, Any]] = {}
+        for asset_type, filename in filenames.items():
+            id_field = _QUALITY_ID_FIELD[asset_type]
+            for value in _read_jsonl(accepted_dir / filename):
+                accepted_assets[str(value[id_field])] = (asset_type, value)
+            for value in _read_jsonl(run_dir / filename):
+                raw_assets[str(value[id_field])] = value
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        raw_findings = quality_report.get("findings")
+        assert isinstance(raw_findings, list)
+        for finding in raw_findings:
+            assert isinstance(finding, Mapping)
+            for asset_id in finding["asset_ids"]:
+                grouped.setdefault(str(asset_id), []).append(dict(finding))
+        unknown = sorted(set(grouped) - set(accepted_assets))
+        if unknown:
+            raise ValueError("quality audit references assets outside the accepted snapshot")
+
+        items: list[dict[str, Any]] = []
+        for asset_id in sorted(grouped):
+            asset_type, accepted = accepted_assets[asset_id]
+            raw = raw_assets.get(asset_id)
+            if raw is None:
+                raise ValueError("accepted quality finding lacks its immutable run asset")
+            findings = sorted(
+                grouped[asset_id],
+                key=lambda value: (str(value["code"]), str(value.get("field") or "")),
+            )
+            proposed_edits = _quality_proposed_edits(accepted, findings, policy)
+            recommendation = _quality_review_recommendation(findings, proposed_edits)
+            current_fields = {
+                "category": accepted["category"],
+                "language": accepted["language"],
+                "quality_score": accepted["quality_score"],
+                **{
+                    field: accepted[field]
+                    for field in _QUALITY_TEXT_FIELDS[asset_type]
+                    if field in accepted
+                },
+            }
+            items.append(
+                {
+                    "asset_id": asset_id,
+                    "asset_type": asset_type,
+                    "based_on_hash": sha256_json(raw),
+                    "findings": findings,
+                    "recommended_action": recommendation,
+                    "current_material_fields": current_fields,
+                    "proposed_edits": proposed_edits,
+                    "decision_draft": {
+                        "asset_id": asset_id,
+                        "decision": None,
+                        "based_on_hash": sha256_json(raw),
+                        "reviewer": reviewer.strip(),
+                        "reason": None,
+                        "edits": proposed_edits,
+                    },
+                }
+            )
+
+        markdown = _quality_review_markdown(
+            run_id,
+            reviewer.strip(),
+            str(quality_report["artifact_fingerprint"]),
+            items,
+        )
+        packet_path = output_dir / "quality-review-packet.json"
+        markdown_path = output_dir / "quality-review.md"
+        recommendation_counts = dict(
+            sorted(Counter(str(item["recommended_action"]) for item in items).items())
+        )
+        packet: dict[str, Any] = {
+            "schema_name": "writing_material_quality_review_packet",
+            "schema_version": QUALITY_REVIEW_PACKET_SCHEMA_VERSION,
+            "status": "success",
+            "run_id": run_id,
+            "reviewer": reviewer.strip(),
+            "quality_audit_fingerprint": quality_report["artifact_fingerprint"],
+            "accepted_manifest_sha256": manifest_hash,
+            "counts": {
+                "flagged_assets": len(items),
+                "recommendations": recommendation_counts,
+            },
+            "items": items,
+            "packet_path": str(packet_path.resolve()),
+            "markdown_path": str(markdown_path.resolve()),
+            "markdown_sha256": sha256_text(markdown),
+            "decision_import_ready": False,
+            "requires_explicit_reviewer_decision": True,
+            "evidence_text_included": False,
+            "provenance_excerpt_included": False,
+            "derived_material_text_included": True,
+            "review_decisions_modified": False,
+            "accepted_snapshot_modified": False,
+            "index_modified": False,
+            "llm_called": False,
+            "report_files_written": True,
+        }
+        packet["artifact_fingerprint"] = sha256_json(packet)
+        output_dir.mkdir(parents=True, mode=0o700)
+        atomic_write_text(markdown_path, markdown, mode=0o600)
+        atomic_write_json(packet_path, packet, mode=0o600)
+        return packet
+
+
 def _candidate_metrics(
     value: Mapping[str, Any] | None,
     accepted_counts: Mapping[str, int],
@@ -1174,6 +1318,218 @@ def _quality_findings(
     )
     clusters.sort(key=lambda value: (str(value["asset_type"]), str(value["cluster_id"])))
     return findings, clusters
+
+
+def _validate_quality_audit_report(
+    value: Mapping[str, Any],
+    *,
+    run_id: str,
+    accepted_manifest_sha256: str,
+) -> QualityAuditPolicy:
+    fingerprinted = dict(value)
+    fingerprint = fingerprinted.pop("artifact_fingerprint", None)
+    if not isinstance(fingerprint, str) or fingerprint != sha256_json(fingerprinted):
+        raise ValueError("quality audit artifact fingerprint is invalid")
+    policy_raw = value.get("policy")
+    if not isinstance(policy_raw, Mapping):
+        raise ValueError("quality audit policy is invalid")
+    try:
+        policy = QualityAuditPolicy(
+            minimum_quality_score=float(policy_raw["minimum_quality_score"]),
+            maximum_repeated_segment_occurrences=int(
+                policy_raw["maximum_repeated_segment_occurrences"]
+            ),
+            minimum_repeated_segment_characters=int(
+                policy_raw["minimum_repeated_segment_characters"]
+            ),
+            maximum_text_field_characters=int(policy_raw["maximum_text_field_characters"]),
+            maximum_near_duplicate_cluster_size=int(
+                policy_raw["maximum_near_duplicate_cluster_size"]
+            ),
+        ).validate()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("quality audit policy is invalid") from exc
+    findings = value.get("findings")
+    counts = value.get("counts")
+    counts_mapping = counts if isinstance(counts, Mapping) else {}
+    finding_counts = counts_mapping.get("findings")
+    valid_findings = bool(
+        isinstance(findings, list)
+        and findings
+        and all(
+            isinstance(item, Mapping)
+            and isinstance(item.get("code"), str)
+            and isinstance(item.get("severity"), str)
+            and isinstance(item.get("asset_type"), str)
+            and isinstance(item.get("asset_ids"), list)
+            and bool(item.get("asset_ids"))
+            and all(isinstance(asset_id, str) and asset_id for asset_id in item["asset_ids"])
+            for item in findings
+        )
+        and isinstance(finding_counts, Mapping)
+        and dict(finding_counts)
+        == dict(sorted(Counter(str(item["code"]) for item in findings).items()))
+        and counts_mapping.get("findings_total") == len(findings)
+    )
+    if (
+        value.get("schema_name") != "writing_material_quality_audit"
+        or value.get("schema_version") != QUALITY_AUDIT_SCHEMA_VERSION
+        or value.get("status") != "success"
+        or value.get("passed") is not False
+        or value.get("run_id") != run_id
+        or value.get("accepted_manifest_sha256") != accepted_manifest_sha256
+        or value.get("recommendation") != "manual_review_flagged_assets"
+        or value.get("source_text_included") is not False
+        or value.get("review_decisions_modified") is not False
+        or value.get("accepted_snapshot_modified") is not False
+        or value.get("index_modified") is not False
+        or value.get("llm_called") is not False
+        or not valid_findings
+    ):
+        raise ValueError("quality review packet requires a valid failed quality audit")
+    return policy
+
+
+def _quality_proposed_edits(
+    accepted: Mapping[str, Any],
+    findings: Sequence[Mapping[str, Any]],
+    policy: QualityAuditPolicy,
+) -> dict[str, Any]:
+    proposed: dict[str, Any] = {}
+    repeated_fields = {
+        str(value["field"])
+        for value in findings
+        if value.get("code") == "repeated_text_segment" and value.get("field")
+    }
+    repeated_list_fields = {
+        str(value["field"])
+        for value in findings
+        if value.get("code") == "repeated_list_item" and value.get("field")
+    }
+    for field in sorted(repeated_fields):
+        raw = accepted.get(field)
+        cleaned_value: Any
+        if isinstance(raw, str):
+            cleaned_value = _deduplicate_text_segments(raw, policy)
+        elif isinstance(raw, list):
+            cleaned_value = [
+                _deduplicate_text_segments(item, policy) if isinstance(item, str) else item
+                for item in raw
+            ]
+        else:
+            continue
+        if cleaned_value != raw:
+            proposed[field] = cleaned_value
+    for field in sorted(repeated_list_fields):
+        raw = accepted.get(field)
+        if not isinstance(raw, list):
+            continue
+        seen: set[str] = set()
+        cleaned_list: list[Any] = []
+        for item in raw:
+            identity = _normalized_quality_text(item) if isinstance(item, str) else repr(item)
+            if identity not in seen:
+                seen.add(identity)
+                cleaned_list.append(item)
+        if cleaned_list != raw:
+            proposed[field] = cleaned_list
+    return proposed
+
+
+def _quality_review_recommendation(
+    findings: Sequence[Mapping[str, Any]], proposed_edits: Mapping[str, Any]
+) -> str:
+    codes = {str(value["code"]) for value in findings}
+    if proposed_edits:
+        return "edit_repeated_content"
+    if "exact_duplicate_primary_text" in codes:
+        return "compare_then_keep_one_and_reject_redundant"
+    if "near_duplicate_cluster" in codes:
+        return "compare_cluster_then_keep_or_reject"
+    if "low_quality_score" in codes:
+        return "manual_keep_edit_or_reject"
+    return "manual_keep_or_edit"
+
+
+def _deduplicate_text_segments(value: str, policy: QualityAuditPolicy) -> str:
+    parts = re.split(r"([.!?\u3002\uff01\uff1f;\uff1b\n]+)", value)
+    result: list[str] = []
+    seen: set[str] = set()
+    for index in range(0, len(parts), 2):
+        segment = parts[index]
+        separator = parts[index + 1] if index + 1 < len(parts) else ""
+        identity = _normalized_quality_text(segment)
+        if len(identity) >= policy.minimum_repeated_segment_characters:
+            if identity in seen:
+                continue
+            if not separator and any(previous.startswith(identity) for previous in seen):
+                continue
+            seen.add(identity)
+        result.extend((segment, separator))
+    return "".join(result).strip()
+
+
+def _quality_review_markdown(
+    run_id: str,
+    reviewer: str,
+    audit_fingerprint: str,
+    items: Sequence[Mapping[str, Any]],
+) -> str:
+    lines = [
+        "# Writing-material quality review packet",
+        "",
+        f"- Run: `{run_id}`",
+        f"- Reviewer: `{reviewer}`",
+        f"- Quality audit: `{audit_fingerprint}`",
+        "- Evidence/source excerpts included: no",
+        "- Decision import ready: no",
+        "",
+        "Fill an explicit decision and reason outside this packet; do not pass this draft "
+        "directly to `review apply`.",
+        "",
+    ]
+    for item in items:
+        lines.extend(
+            [
+                f"## {item['asset_id']}",
+                "",
+                f"- Type: `{item['asset_type']}`",
+                f"- Recommendation: `{item['recommended_action']}`",
+                f"- Based-on hash: `{item['based_on_hash']}`",
+                "- Findings: "
+                + ", ".join(
+                    f"`{value['code']}`"
+                    + (f" (`{value['field']}`)" if value.get("field") else "")
+                    for value in item["findings"]
+                ),
+                "",
+                "Current derived material fields:",
+                "",
+                *[
+                    f"    {line}"
+                    for line in json.dumps(
+                        item["current_material_fields"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    ).splitlines()
+                ],
+                "",
+                "Proposed deterministic edits:",
+                "",
+                *[
+                    f"    {line}"
+                    for line in json.dumps(
+                        item["proposed_edits"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    ).splitlines()
+                ],
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _quality_finding(

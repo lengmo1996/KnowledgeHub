@@ -18,6 +18,7 @@ from knowledgehub.writing_rag.extract import WritingMaterialExtractionService
 from knowledgehub.writing_rag.materials import infer_writing_asset_type
 from knowledgehub.writing_rag.pilot import (
     AcceptedCorpusQualityAuditor,
+    AcceptedCorpusQualityReviewRenderer,
     CandidateRetrievalEvaluator,
     ControlledPilotEvaluator,
     PilotRetrievalOutcome,
@@ -137,6 +138,11 @@ def add_writing_material_parser(subparsers: Any) -> None:
     quality = pilot_commands.add_parser("audit-quality")
     quality.add_argument("--run-id", required=True)
     quality.add_argument("--output", type=Path)
+    quality_review = pilot_commands.add_parser("render-quality-review")
+    quality_review.add_argument("--run-id", required=True)
+    quality_review.add_argument("--audit-report", type=Path, required=True)
+    quality_review.add_argument("--reviewer", required=True)
+    quality_review.add_argument("--output-dir", type=Path, required=True)
 
 
 def run_writing_material_command(args: argparse.Namespace) -> int:
@@ -329,6 +335,36 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                 result = AcceptedCorpusQualityAuditor(review).audit(args.run_id)
                 if args.output is not None:
                     atomic_write_json(args.output, result, mode=0o600)
+            elif args.writing_material_pilot_command == "render-quality-review":
+                packet = AcceptedCorpusQualityReviewRenderer(review).render(
+                    args.run_id,
+                    quality_report=_read_object(args.audit_report),
+                    reviewer=args.reviewer,
+                    output_dir=args.output_dir,
+                )
+                result = {
+                    key: packet[key]
+                    for key in (
+                        "schema_name",
+                        "schema_version",
+                        "status",
+                        "run_id",
+                        "reviewer",
+                        "quality_audit_fingerprint",
+                        "artifact_fingerprint",
+                        "counts",
+                        "packet_path",
+                        "markdown_path",
+                        "decision_import_ready",
+                        "requires_explicit_reviewer_decision",
+                        "evidence_text_included",
+                        "provenance_excerpt_included",
+                        "review_decisions_modified",
+                        "accepted_snapshot_modified",
+                        "index_modified",
+                        "llm_called",
+                    )
+                }
             else:
                 result = _run_pilot_retrieval_command(args, config, review)
                 if args.output is not None:
