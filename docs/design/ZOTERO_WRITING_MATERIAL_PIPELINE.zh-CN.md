@@ -1,10 +1,10 @@
 # Zotero 写作素材自动提取流水线
 
-状态：MVP 已实现，正式索引接入仍受人工审核和 candidate gate 约束
+状态：当前30篇pilot已完成提取、审核、accepted-only release和生产检索；保持pilot、不扩量
 设计版本：1.0
 Taxonomy：`writing-taxonomy-v1`
 
-实施注记（2026-07-18）：后续计划 Phase 1-4 已完成。磁盘 artifact 采用 schema v1 closed-world 重校验；Docling provenance 采用 fail-closed contract；审核采用 append-only events + 显式 projection，完整 accepted-v2 snapshot 必须 100% explicit decision；增量入口支持冻结 selection、document/collection selector、哈希 checkpoint resume、stale reason 和幂等 attempt。
+实施注记（更新至2026-07-19）：实施计划Phase 1–10已完成。磁盘artifact采用closed-world重校验；Docling provenance采用fail-closed contract；审核采用append-only events、版本化projection与acknowledgement receipt；增量入口支持冻结selection、document/collection selector、哈希checkpoint resume、stale reason和幂等attempt。五年保留期与本地访问策略现在由只读governance validation报告并约束后续index eligibility，但不会自动删除数据或冒充独立身份认证。
 
 Release 注记：clone-and-merge、candidate count/schema validation、显式 stage/promotion/rollback 已封装在 `writing_rag/release.py`，运行边界见 `docs/writing_material_release_runbook.md`。受控 pilot 评估与报告生成见 `writing_rag/pilot.py` 和 `docs/writing_material_pilot_runbook.md`。这些能力默认不连接或修改生产 alias。2026-07-19 经独立授权和验收，30篇 pilot 的 accepted-only 增量已通过 release candidate `knowledgehub_writing_release_20260719_f99463512f16_quality_v2` stage/promote 到 `knowledgehub_writing_current`；旧134-point physical collection和发布前snapshot均保留为rollback依据，本次没有扩大selection或重新调用LLM。
 
@@ -229,12 +229,17 @@ Classification 输入只包含限定 section、authoritative sentence ID/text、
 }
 ```
 
-Abstraction 只接收已验证 evidence IDs 和 immutable evidence。其 schema 不存在 `original_text` 字段；输出 strategy/template/phrase。`abstraction-v1` 的 strategy 使用风险数组；`abstraction-v2` 改为 closed boolean map；`abstraction-v3` 增加动态 evidence-ID enum 与引用类别规则。当前 `abstraction-v4` 进一步让 provider schema 的每个 maxLength/maxItems 与 parser/stored validator 精确同构，category enum 动态收窄到当前 evidence 类别，并拒绝重复 material payload。review 从磁盘重读时再次验证 category-reference。本地只将 true 风险键派生为 material 的 `risk_flags`，不会静默去重、删除引用或修改 evidence：
+Abstraction只接收已验证evidence IDs和immutable evidence，其schema不存在`original_text`字段；输出strategy/template/phrase。v4使provider长度/数量限制与本地validator同构；v5以闭合boolean object消除重复evidence引用；v6把material上限绑定当前batch并配合明确token-limit自适应二分；当前`abstraction-v7`再以唯一`category_evidence_decisions`键把category与同类别evidence ID结构绑定。review从磁盘重读时再次验证category-reference。本地只将true风险键派生为material的`risk_flags`，不会静默去重、删除引用或修改evidence：
 
 ```json
 {
-  "schema_version": "abstraction-v4",
+  "schema_version": "abstraction-v7",
   "strategies": [{
+    "category_evidence_decisions": {
+      "gap_identification": {
+        "evidence:...": true
+      }
+    },
     "risk_flag_decisions": {
       "unsupported_superlative": false,
       "exaggerated_novelty": false,
@@ -246,7 +251,7 @@ Abstraction 只接收已验证 evidence IDs 和 immutable evidence。其 schema 
 }
 ```
 
-所有未知字段、缺少风险键、非布尔风险值、未知 enum、非法长度、越界、重复 payload 或语义不受支持的引用均拒绝。历史 `abstraction-v1/v2/v3` 已保存材料继续只读可验证，新 provider 请求只生成 v4。
+所有未知字段、缺少风险键、非布尔风险值、未知enum、非法长度、越界、重复payload或语义不受支持的引用均拒绝。历史`abstraction-v1`至`v6`已保存材料继续只读可验证，新provider请求只生成v7。
 
 Provider 请求固定 temperature 0，并追踪 provider/model、prompt hash、schema/taxonomy version、request hash 和 response hash。缓存 key 还包含实际 schema 和输入；缓存文件权限为 0600。
 
@@ -380,6 +385,8 @@ knowledgehub writing-material review apply-quality --run-id <run-id> \
   --decisions /tmp/writing-material-quality-decisions.jsonl --dry-run
 ```
 
+`validate`除source/review/accepted chain外还输出`writing-material-governance-validation-v1`：可解析的five-year policy给出确定到期时间；run目录树任何group/other权限漂移或保留期到期都会使新的index/release失去eligibility。该检查只读，不删除到期资产，也不把文件权限声称为reviewer身份认证。
+
 Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖旧 run。非 dry-run OpenAI-compatible extraction 要求配置 approved model 和 base URL 环境变量；`deterministic_fixture` 只允许作为明确标记的测试输出。
 
 二次人工审核采用append-only event与版本化projection：首个历史`accepted/`保留，后续完整snapshot写入`accepted-revisions/rev-<fingerprint>/`，并由0600 `accepted-current.json`记录。读取逻辑根据review events/projection hash解析当前revision并校验pointer，不能通过替换pointer复用旧定位或旧审核状态。质量决定导入必须先`apply-quality --dry-run`，真实导入另需`--yes`；它不修改evidence，也不创建或发布索引。
@@ -401,6 +408,7 @@ Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖
 - accepted/edited/rejected 规则和 evidence immutability；
 - accepted-only candidate 输入与 active collection 保护；
 - lexical clustering 的稳定性与语言隔离。
+- five-year retention到期、private permission drift、历史自由文本policy与无approval run兼容。
 
 建议 pilot：
 
@@ -419,21 +427,21 @@ Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖
 
 默认目标章节字符级 coverage 门槛为 0.80。未选择章节的解析缺口不会拖低本次 run；paragraph segment map 可以保留不连续但合法的区间，而所有入选 evidence 仍受逐字符完整映射硬门槛保护。该值是辅助质量门槛，不会放宽单条 evidence 的 exact-span 要求。
 
-需要用户决定：
+当前pilot已经确定：
 
-- provider endpoint、model 和 secret 环境变量的最终值；
-- 30-50 篇 paper selection 及中英文比例；
-- evidence 保留期限、访问权限和版权策略；
-- reviewer 使用自由文本还是受控身份；
-- pilot 后采用“克隆现有 Writing release 后增量合并”还是长期独立 Writing Materials collection；
-- provenance coverage 0.80 是否应在 pilot 后提高，或按文献类型/parser version 分层。
+- provider/model为本机OpenAI-compatible `qwen3-32b-awq`；
+- selection固定30篇且不扩量；当前accepted语言分布为en=2470、zh=23、und=3；
+- rights=`private research use`、retention=`five years`、access=`local reviewer only`、reviewer=`lengmo`；
+- 采用clone-and-merge Writing release，稳定alias已指向quality-v2/1107 points；
+- provenance coverage继续保持0.80，不为提高召回放宽单条exact-span硬门槛。
 
-仍无法从本轮本地实现确认：
+当前外部验证：
 
-- 在线 Qdrant 当前 alias 和 point payload 状态；
-- Docling `prov.charspan` 对全部论文、OCR 和跨页自然段的一致性；
-- pilot selection 中 PyMuPDF fallback/OCR/低 coverage 的实际比例；
-- 最终选择的 provider/model 对 strict JSON schema 的可靠程度。
+- Qdrant collection实时为green、optimizer ok、1107/1107 points；稳定alias和生产sparse query均已读回；
+- 当前30篇run使用classification-v9/abstraction-v7完成30/30、0失败，严格schema真实provider路径通过；
+- 当前run governance为active至2031-07-19，28/28路径满足private filesystem permissions。
+
+仍保留的边界：Docling `prov.charspan`不能外推到selection之外的全部论文、OCR和跨页自然段；非Docling/PyMuPDF fallback继续fail closed；`local reviewer only`没有独立RBAC身份层；生产rollback已实现并经fixture测试，但未执行真实切换演练。
 
 ## 17. 修改和新增文件
 
@@ -442,7 +450,7 @@ Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖
 - `docs/design/ZOTERO_WRITING_MATERIAL_PIPELINE.zh-CN.md`
 - `configs/writing_materials.yaml`
 - `configs/writing/taxonomy-v1.yaml`
-- `configs/writing/prompts/{classify-v6,abstract-v4}.md`
+- `configs/writing/prompts/classify-v1..v9.md`与`abstract-v1..v7.md`
 - `src/knowledgehub/writing_rag/{provenance,materials,extract,review,release,pilot}.py`
 - `docs/writing_material_{provenance_compatibility,release_runbook,pilot_runbook}.md`
 - `src/knowledgehub/cli/writing_material.py`

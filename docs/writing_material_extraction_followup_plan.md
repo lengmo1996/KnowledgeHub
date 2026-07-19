@@ -2,7 +2,7 @@
 
 - 基线审计：`docs/writing_material_extraction_implementation_audit.md`
 - 原则：只列未完成或需修正工作；先 provenance/exact-span/schema/dry-run，再扩量；正式索引前必须有人审 gate
-- 当前状态：Phase 1–8全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。Phase 7已修复两条retrieval miss并完成clone-and-merge promotion，磁盘production alias state为quality-v2 active/1107，旧134-point physical保留。用户决定保持30篇pilot、不扩量。Phase 8完成36项全部accepted质量复审、versioned accepted、receipt和audit-v2；当前36 flagged全部acknowledged、0 unreviewed，`passed=false`但`review_required=false`。当前无未勾选任务，也没有新的LLM、扩量或索引授权。
+- 当前状态：Phase 1–10全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。Phase 7已完成clone-and-merge promotion，production alias实时为quality-v2 active/1107。用户保持30篇pilot、不扩量。Phase 8完成36项全部accepted质量复审、versioned accepted、receipt和audit-v2；Phase 10新增只读governance validation，当前five-year retention active至2031-07-19、28/28 run paths private。当前无新的LLM、扩量、审核内容修改或索引授权。
 
 ## Phase 1：状态与 schema 安全收口（P0）
 
@@ -784,7 +784,22 @@ Phase 8E结论：人工质量审核和机器可追踪acknowledgement均已完成
 2. [x] 将基线审计第1–15节明确标注为历史，不删除原始决策；更新第0节权威矩阵，消除WORKTREE_ONLY、生产134 points和未promotion等已过时“当前态”。
 3. [x] 对账Git：Phase 9开始时工作区干净，`main`领先`origin/main` 9 commits；本终态文档提交后为10 commits。记录为本地已提交但未push，不声称远端已合并。
 4. [x] 对账真实状态：current accepted source validation errors=[]/index eligible；audit-v2为36 acknowledged/0 unreviewed；磁盘alias state为quality-v2 active/1107。
-5. [x] Qdrant服务当前未监听6333，因此不新增live collection声明；未启动服务、未执行index/release，也未修改alias。
+5. [x] Phase 9受限sandbox内未能连接6333，因而当时不新增live声明；Phase 10已确认这是sandbox false negative。两个阶段均未执行index/release或修改alias。
 6. [x] 将非Docling/OCR fail-closed、默认12类、单一OpenAI-compatible provider、run级timestamp和不回写raw review status继续列为明确设计边界，不机械实现为破坏兼容的迁移。
 
 Phase 9结论：此前“基于Zotero文献自动构建写作素材知识库”计划在当前30篇pilot范围内已完成，终态为`stop_at_acknowledged_quality_findings`。没有可在既有授权下继续自动执行的强制任务。未来扩量、修改已接受内容、push或新production release均属于新授权范围。
+
+## Phase 10：运行治理收口（2026-07-19）
+
+1. [x] 保持既有approval schema和run immutable；只读解析当前`five years`policy并计算到期时间。
+2. [x] 校验run目录树private permissions，拒绝symlink与group/other访问漂移；明确文件权限不等于reviewer身份认证。
+3. [x] retention到期或权限漂移时阻止后续index/release eligibility，但不自动删除数据、缓存、manifest或现有production points。
+4. [x] 历史自由文本policy与无approval fixture保持兼容，分别报告warning/`not_declared`。
+5. [x] 真实run只读验证：governance verified、active至2031-07-19、28/28 paths private、errors=[]、index eligible。
+6. [x] 纠正Phase 9受sandbox网络隔离影响的Qdrant offline判断：真实Qdrant green、1107/1107，production alias/query在线。
+7. [x] 同步设计文档当前release、abstraction-v7、已决策policy与剩余边界，不再把历史v4或未promotion状态写成当前态。
+8. [x] 验证正常、到期、权限漂移、历史自由文本与无approval兼容路径；writing-material 164 passed、全仓548 passed、Ruff通过、mypy 129 source files通过、真实run validate成功。
+
+实际修改文件：`src/knowledgehub/writing_rag/review.py`、`tests/writing_material/test_extract_review.py`、设计文档、本计划与实施审计。没有扩量、真实LLM请求、extraction、审核决定变更、index/release写入或新依赖。
+
+Phase 10结论：当前30篇pilot的保留期和本地访问权限已从approval元数据提升为可重复只读验证；当前run active且private。自动删除、独立RBAC和真实production rollback仍是明确未授权的运维边界，不伪装为已完成能力。

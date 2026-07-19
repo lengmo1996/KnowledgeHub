@@ -5,6 +5,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
@@ -32,6 +33,7 @@ from knowledgehub.writing_rag.review import (
     ReviewValidationError,
     WritingMaterialCandidateIndexer,
     WritingMaterialReviewService,
+    validate_run_governance,
 )
 
 from .helpers import (
@@ -41,6 +43,103 @@ from .helpers import (
     build_literature_fixture,
     write_runtime_contract,
 )
+
+
+def _governance_run(tmp_path: Path, **approval_overrides: str) -> tuple[Path, dict[str, Any]]:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(mode=0o700)
+    run_dir.chmod(0o700)
+    artifact = run_dir / "manifest.json"
+    artifact.write_text("{}", encoding="utf-8")
+    artifact.chmod(0o600)
+    approval = {
+        "approved_at": "2026-07-19T06:47:32+00:00",
+        "rights_basis": "private research use",
+        "retention_policy": "five years",
+        "access_policy": "local reviewer only",
+    }
+    approval.update(approval_overrides)
+    return run_dir, {"pilot_approval": approval}
+
+
+def test_run_governance_verifies_five_year_private_policy(tmp_path) -> None:
+    run_dir, manifest = _governance_run(tmp_path)
+    result = validate_run_governance(
+        run_dir,
+        manifest,
+        now=datetime(2027, 7, 19, tzinfo=timezone.utc),
+    )
+    assert result["status"] == "verified"
+    assert result["errors"] == []
+    assert result["retention"] == {
+        "policy": "five years",
+        "status": "active",
+        "years": 5,
+        "expires_at": "2031-07-19T06:47:32+00:00",
+    }
+    assert result["access"]["status"] == "private"
+    assert result["access"]["checked_paths"] == 2
+    assert result["access"]["identity_enforced"] is False
+
+
+def test_run_governance_blocks_expired_retention(tmp_path) -> None:
+    run_dir, manifest = _governance_run(tmp_path)
+    result = validate_run_governance(
+        run_dir,
+        manifest,
+        now=datetime(2031, 7, 19, 6, 47, 32, tzinfo=timezone.utc),
+    )
+    assert result["status"] == "failed"
+    assert result["retention"]["status"] == "expired"
+    assert result["errors"] == ["writing-material retention period has expired"]
+
+
+def test_run_governance_blocks_permission_drift(tmp_path) -> None:
+    run_dir, manifest = _governance_run(tmp_path)
+    (run_dir / "manifest.json").chmod(0o640)
+    result = validate_run_governance(
+        run_dir,
+        manifest,
+        now=datetime(2027, 7, 19, tzinfo=timezone.utc),
+    )
+    assert result["status"] == "failed"
+    assert result["access"]["status"] == "permission_drift"
+    assert "manifest.json" in " ".join(result["errors"])
+
+
+def test_run_governance_keeps_legacy_free_text_policy_compatible(tmp_path) -> None:
+    run_dir, manifest = _governance_run(
+        tmp_path,
+        retention_policy="delete with temporary test directory",
+        access_policy="test process only",
+    )
+    result = validate_run_governance(
+        run_dir,
+        manifest,
+        now=datetime(2027, 7, 19, tzinfo=timezone.utc),
+    )
+    assert result["status"] == "verified"
+    assert result["errors"] == []
+    assert result["retention"]["status"] == "declared_unparsed"
+    assert len(result["warnings"]) == 2
+
+    undeclared = validate_run_governance(
+        run_dir,
+        {},
+        now=datetime(2027, 7, 19, tzinfo=timezone.utc),
+    )
+    assert undeclared["status"] == "not_declared"
+    assert undeclared["access"]["status"] == "private"
+    assert undeclared["access"]["checked_paths"] == 2
+
+    (run_dir / "manifest.json").chmod(0o604)
+    drifted = validate_run_governance(
+        run_dir,
+        {},
+        now=datetime(2027, 7, 19, tzinfo=timezone.utc),
+    )
+    assert drifted["status"] == "failed"
+    assert drifted["access"]["status"] == "permission_drift"
 
 
 def test_review_cli_requires_explicit_partial_snapshot_flag() -> None:

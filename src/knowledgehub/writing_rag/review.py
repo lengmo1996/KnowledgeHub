@@ -86,6 +86,122 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def validate_run_governance(
+    run_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Audit declared retention and private local access without mutating artifacts."""
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    approval_value = manifest.get("pilot_approval")
+    if isinstance(approval_value, Mapping):
+        policy_declared = True
+        approval: Mapping[str, Any] = approval_value
+    else:
+        policy_declared = False
+        approval = {}
+        warnings.append("pilot approval governance policy is not declared")
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("governance validation time must include a timezone")
+    current = current.astimezone(timezone.utc)
+    approved_at_raw = approval.get("approved_at")
+    approved_at: datetime | None = None
+    if isinstance(approved_at_raw, str):
+        try:
+            approved_at = datetime.fromisoformat(approved_at_raw)
+        except ValueError:
+            pass
+    if policy_declared and (approved_at is None or approved_at.tzinfo is None):
+        errors.append("pilot approval governance timestamp is invalid")
+
+    retention_policy = str(approval.get("retention_policy") or "").strip()
+    retention_normalized = " ".join(retention_policy.casefold().split())
+    retention: dict[str, Any] = {
+        "policy": retention_policy,
+        "status": "declared_unparsed" if policy_declared else "not_declared",
+        "years": None,
+        "expires_at": None,
+    }
+    if not policy_declared:
+        pass
+    elif retention_normalized in {"five years", "retain for five years"}:
+        retention["years"] = 5
+        if approved_at is not None and approved_at.tzinfo is not None:
+            approved_at = approved_at.astimezone(timezone.utc)
+            try:
+                expires_at = approved_at.replace(year=approved_at.year + 5)
+            except ValueError:
+                expires_at = approved_at.replace(
+                    year=approved_at.year + 5,
+                    month=2,
+                    day=28,
+                )
+            retention["expires_at"] = expires_at.isoformat()
+            retention["status"] = "expired" if current >= expires_at else "active"
+            if retention["status"] == "expired":
+                errors.append("writing-material retention period has expired")
+    elif retention_policy:
+        warnings.append("retention policy is declared but cannot be evaluated automatically")
+    else:
+        errors.append("pilot approval retention policy is missing")
+        retention["status"] = "missing"
+
+    access_policy = str(approval.get("access_policy") or "").strip()
+    access_normalized = " ".join(access_policy.casefold().split())
+    if not policy_declared:
+        pass
+    elif not access_policy:
+        errors.append("pilot approval access policy is missing")
+    elif access_normalized != "local reviewer only":
+        warnings.append("access policy is declared but has no automatic identity enforcement")
+
+    checked_paths = 0
+    private_paths = 0
+    paths = [run_dir, *sorted(run_dir.rglob("*"))]
+    for path in paths:
+        checked_paths += 1
+        try:
+            if path.is_symlink():
+                errors.append(f"run artifact must not be a symlink: {path.relative_to(run_dir)}")
+                continue
+            mode = path.stat().st_mode & 0o777
+        except OSError as exc:
+            errors.append(f"run artifact permissions are unreadable: {path}: {exc}")
+            continue
+        if mode & 0o077:
+            label = "." if path == run_dir else str(path.relative_to(run_dir))
+            errors.append(f"run artifact is accessible by group or other users: {label}")
+        else:
+            private_paths += 1
+
+    rights_basis = str(approval.get("rights_basis") or "").strip()
+    if policy_declared and not rights_basis:
+        errors.append("pilot approval rights basis is missing")
+    access = {
+        "policy": access_policy,
+        "enforcement": "private_filesystem_permissions",
+        "status": "private" if private_paths == checked_paths else "permission_drift",
+        "checked_paths": checked_paths,
+        "private_paths": private_paths,
+        "identity_enforced": False,
+    }
+    return {
+        "schema_version": "writing-material-governance-validation-v1",
+        "status": "failed" if errors else "verified" if policy_declared else "not_declared",
+        "errors": errors,
+        "warnings": warnings,
+        "rights_basis": rights_basis,
+        "approved_at": approved_at_raw,
+        "retention": retention,
+        "access": access,
+    }
+
+
 class ReviewValidationError(ValueError):
     """An invalid, stale or provenance-breaking review operation."""
 
@@ -953,6 +1069,8 @@ class WritingMaterialReviewService:
             }
         except (ReviewValidationError, TypeError, ValueError) as exc:
             return {"status": "failed", "run_id": run_id, "errors": [str(exc)]}
+        governance = validate_run_governance(run_dir, manifest)
+        errors.extend(str(value) for value in governance["errors"])
         versions = manifest.get("versions")
         if not isinstance(versions, Mapping):
             errors.append("run manifest versions are invalid")
@@ -1091,6 +1209,7 @@ class WritingMaterialReviewService:
             "source_verified": verify_source,
             "extraction_status": extraction_status,
             "index_eligible": not errors and extraction_status == "success" and complete_snapshot,
+            "governance": governance,
         }
 
     def _records(self, run_dir: Path) -> dict[str, list[dict[str, Any]]]:
