@@ -690,3 +690,22 @@ Phase 1 已采用以下保守默认并保留决策历史：
 ### Phase 7 结论与下一阶段
 
 Phase 7A/7B 已形成闭环。生产 Writing alias 已部署并保留 rollback fallback；下一阶段不是扩量。若继续质量工作，优先对已 accepted 内容做人工抽样复核、去重/聚类和质量评分校准，并以新 gold cases 验证，任何中文扩量仍须重新进入 selection + dry-run 审批。
+
+## Phase 8：accepted corpus 确定性质量审计（2026-07-19）
+
+本阶段只审计当前30篇 complete accepted snapshot，不扩大 selection、不重新 extraction、不调用 LLM、不修改审核决定或生产索引。审计报告不得复制 evidence/material 原文。
+
+1. [x] 新增 `QualityAuditPolicy` 与 `AcceptedCorpusQualityAuditor`，绑定 accepted-v2 complete/source-verified gate、accepted manifest SHA-256 和 `writing-material-quality-audit-v1` artifact fingerprint。
+2. [x] 实现 NFKC + whitespace/casefold 规范化；检测低于0.75的质量分、字段片段重复超过2次、受审字段超过800字符、重复列表项、同类别/语言的精确主文本重复，以及 persisted lexical cluster 多成员。
+3. [x] 报告仅保存 asset ID、字段、observed/threshold 和 cluster membership；显式记录 `source_text_included=false`、`review_decisions_modified=false`、`accepted_snapshot_modified=false`、`index_modified=false`、`llm_called=false`。
+4. [x] 新增 `writing-material pilot audit-quality --run-id --output`；显式 output 使用0600，未提供 output 时只向 stdout 返回报告。
+5. [x] 补充 clean/read-only/fingerprint/privacy、重复片段、低分、超长、重复列表、精确重复、near-duplicate cluster、不完整 review 拒绝、非法 policy、Unicode normalization 和 CLI parser 测试。
+6. [x] 对 run `20260719T064746Z-f99463512f16` 的973个 accepted material 执行真实只读审计：36 assets flagged、42 findings，其中6个 repeated-text error、26个 oversized warning、8个 low-score warning、2个双成员 lexical cluster warning；无 exact primary-text duplicate、无 repeated list item。
+7. [x] 报告 `/tmp/knowledgehub-writing-material-phase6b-20260718/quality-audit-20260719T064746Z-f99463512f16.json` 权限0600，fingerprint `af061ab96e18ffec3d9de059ae4424bd0033967b04c1f8c8a44db52a5ac289d0`，`passed=false`、recommendation=`manual_review_flagged_assets`。
+8. [x] 全仓 pytest 539 passed、Ruff passed、mypy 129 source files passed、定向质量审计测试4 passed；没有修改 accepted snapshot、review events、Qdrant alias/collection、cache或manifest。
+
+实际修改文件：`src/knowledgehub/writing_rag/pilot.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_quality_audit.py`、`tests/writing_material/test_extract_review.py`、本计划、审计补充与 pilot runbook。
+
+设计偏差：此前 pilot gate 只度量检索结果内重复，不审计 accepted corpus 本身；本阶段补充 corpus-level report，但没有把它追溯加入已经完成的 Phase 7 release manifest，也没有自动回滚当前 production alias。原因是发现项包含需人工判断的低分/near-duplicate warning，不能用新规则静默覆盖用户已接受的材料。
+
+下一阶段为 Phase 8B：基于36个 flagged asset 生成不含 evidence 原文的人工复核包，分别提出 keep/edit/reject 建议；只有 reviewer 显式决定后，才生成新的 complete accepted projection、隔离 candidate 和 release。当前30篇范围继续不扩量。

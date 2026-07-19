@@ -147,7 +147,21 @@ knowledgehub writing-material pilot evaluate \
 
 只有所有 gate 通过时，状态才是 `eligible_for_manual_expansion_decision`。这不是扩量授权，更不是 promotion 授权。
 
-## 4. 默认停止条件
+## 4. Accepted corpus 质量审计
+
+complete accepted snapshot 和检索 gate 通过后，使用确定性、无 LLM 的质量审计检查低自评分、字段内重复片段、超长字段、重复列表项、精确主文本重复及多成员 lexical cluster：
+
+```text
+knowledgehub writing-material pilot audit-quality \
+  --run-id RUN_ID \
+  --output /tmp/writing-material-quality-audit.json
+```
+
+报告采用 `writing-material-quality-audit-v1`，绑定 accepted manifest SHA-256 和自身 artifact fingerprint。报告仅包含 asset ID、字段名、计数和阈值，不复制 evidence 或 material 文本；命令不调用 LLM，不修改 review events、accepted snapshot 或索引。`passed=false` 表示应为 flagged assets 创建显式人工复核决定，不能静默编辑 evidence，也不能直接覆盖当前 accepted snapshot。
+
+默认 policy：quality score 至少0.75；同一字段片段最多重复2次；受审字段最多800字符；lexical cluster 默认只允许单成员。阈值完整写入报告，调整阈值必须产生新的 fingerprinted report。
+
+## 5. 默认停止条件
 
 - selection 不在 30–50 篇；
 - provenance 通过率低于 0.80；

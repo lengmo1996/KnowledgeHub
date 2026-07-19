@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from knowledgehub.writing_rag.extract import (
     validated_provider_origin,
 )
 from knowledgehub.writing_rag.review import (
+    ACCEPTED_SCHEMA_VERSION,
     CANDIDATE_SCHEMA_VERSION,
     WritingMaterialReviewService,
 )
@@ -31,6 +33,31 @@ DRY_RUN_REPORT_SCHEMA_VERSION = PILOT_GATE_REPORT_SCHEMA_VERSION
 RETRIEVAL_CASE_SCHEMA_VERSION = "writing-material-retrieval-case-v1"
 RETRIEVAL_REPORT_SCHEMA_VERSION = "writing-material-retrieval-evaluation-v1"
 PROVIDER_PREFLIGHT_SCHEMA_VERSION = "writing-material-provider-preflight-v2"
+QUALITY_AUDIT_SCHEMA_VERSION = "writing-material-quality-audit-v1"
+
+_QUALITY_TEXT_FIELDS: Mapping[str, tuple[str, ...]] = {
+    "strategy": (
+        "label",
+        "description",
+        "steps",
+        "applicability",
+        "claim_strength_guidance",
+        "explanation_zh",
+        "explanation_en",
+    ),
+    "template": ("template_text", "constraints", "claim_strength_guidance"),
+    "phrase": ("text", "function", "position", "register", "constraints"),
+}
+_QUALITY_PRIMARY_TEXT_FIELD = {
+    "strategy": "description",
+    "template": "template_text",
+    "phrase": "text",
+}
+_QUALITY_ID_FIELD = {
+    "strategy": "strategy_id",
+    "template": "template_id",
+    "phrase": "phrase_id",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +93,28 @@ class RetrievalPolicy:
             if name.endswith("_rate") or name.endswith("_k") or name.endswith("_ratio"):
                 if not 0 <= float(value) <= 1:
                     raise ValueError(f"retrieval policy {name} must be between zero and one")
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class QualityAuditPolicy:
+    minimum_quality_score: float = 0.75
+    maximum_repeated_segment_occurrences: int = 2
+    minimum_repeated_segment_characters: int = 12
+    maximum_text_field_characters: int = 800
+    maximum_near_duplicate_cluster_size: int = 1
+
+    def validate(self) -> "QualityAuditPolicy":
+        if not 0 <= self.minimum_quality_score <= 1:
+            raise ValueError("quality audit minimum score must be between zero and one")
+        for name in (
+            "maximum_repeated_segment_occurrences",
+            "minimum_repeated_segment_characters",
+            "maximum_text_field_characters",
+            "maximum_near_duplicate_cluster_size",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"quality audit policy {name} must be positive")
         return self
 
 
@@ -650,6 +699,112 @@ class CandidateRetrievalEvaluator:
         return report
 
 
+class AcceptedCorpusQualityAuditor:
+    """Audit one complete accepted snapshot without copying text or changing state."""
+
+    def __init__(
+        self,
+        review: WritingMaterialReviewService,
+        policy: QualityAuditPolicy | None = None,
+    ) -> None:
+        self.review = review
+        self.policy = (policy or QualityAuditPolicy()).validate()
+
+    def audit(self, run_id: str) -> dict[str, Any]:
+        validation = self.review.validate(run_id, verify_source=True)
+        if validation.get("status") != "success" or not validation.get("index_eligible"):
+            raise ValueError("quality audit requires a source-verified complete review")
+        accepted_dir = self.review.run_dir(run_id) / "accepted"
+        manifest_path = accepted_dir / "manifest.json"
+        manifest = _read_object(manifest_path)
+        if (
+            manifest.get("schema_version") != ACCEPTED_SCHEMA_VERSION
+            or manifest.get("review_completeness") != "complete"
+            or manifest.get("pending_count") != 0
+        ):
+            raise ValueError("quality audit requires a complete accepted-v2 snapshot")
+
+        assets: dict[str, list[dict[str, Any]]] = {
+            "strategy": _read_jsonl(accepted_dir / "strategies.jsonl"),
+            "template": _read_jsonl(accepted_dir / "templates.jsonl"),
+            "phrase": _read_jsonl(accepted_dir / "phrases.jsonl"),
+        }
+        counts = manifest.get("counts")
+        if not isinstance(counts, Mapping) or any(
+            counts.get(asset_type) != len(values) for asset_type, values in assets.items()
+        ):
+            raise ValueError("accepted snapshot counts differ from quality audit inputs")
+
+        findings, clusters = _quality_findings(assets, self.policy)
+        flagged_assets = sorted(
+            {
+                str(asset_id)
+                for finding in findings
+                for asset_id in finding.get("asset_ids", ())
+            }
+        )
+        finding_counts = dict(sorted(Counter(str(item["code"]) for item in findings).items()))
+        severity_counts = dict(
+            sorted(Counter(str(item["severity"]) for item in findings).items())
+        )
+        asset_counts = {key: len(value) for key, value in assets.items()}
+        total_assets = sum(asset_counts.values())
+        low_quality_assets = sum(
+            1
+            for values in assets.values()
+            for value in values
+            if float(value["quality_score"]) < self.policy.minimum_quality_score
+        )
+        clustered_assets = sum(int(value["size"]) for value in clusters)
+        gates = {
+            "complete_source_verified_snapshot": True,
+            "no_low_quality_scores": "low_quality_score" not in finding_counts,
+            "no_repeated_segments": "repeated_text_segment" not in finding_counts,
+            "no_oversized_text_fields": "oversized_text_field" not in finding_counts,
+            "no_repeated_list_items": "repeated_list_item" not in finding_counts,
+            "no_exact_duplicate_primary_text": "exact_duplicate_primary_text" not in finding_counts,
+            "no_multi_member_lexical_clusters": "near_duplicate_cluster" not in finding_counts,
+        }
+        passed = all(gates.values())
+        report: dict[str, Any] = {
+            "schema_name": "writing_material_quality_audit",
+            "schema_version": QUALITY_AUDIT_SCHEMA_VERSION,
+            "status": "success",
+            "passed": passed,
+            "run_id": run_id,
+            "accepted_manifest": str(manifest_path),
+            "accepted_manifest_sha256": sha256_text(manifest_path.read_text(encoding="utf-8")),
+            "policy": asdict(self.policy),
+            "counts": {
+                "assets": {**asset_counts, "total": total_assets},
+                "findings": finding_counts,
+                "findings_total": len(findings),
+                "severities": severity_counts,
+                "flagged_assets": len(flagged_assets),
+                "multi_member_clusters": len(clusters),
+            },
+            "metrics": {
+                "flagged_asset_rate": _rate(len(flagged_assets), total_assets),
+                "low_quality_asset_rate": _rate(low_quality_assets, total_assets),
+                "near_duplicate_clustered_asset_rate": _rate(clustered_assets, total_assets),
+            },
+            "gates": gates,
+            "clusters": clusters,
+            "findings": findings,
+            "recommendation": (
+                "quality_gate_passed" if passed else "manual_review_flagged_assets"
+            ),
+            "source_text_included": False,
+            "review_decisions_modified": False,
+            "accepted_snapshot_modified": False,
+            "index_modified": False,
+            "llm_called": False,
+            "writes_performed": False,
+        }
+        report["artifact_fingerprint"] = sha256_json(report)
+        return report
+
+
 def _candidate_metrics(
     value: Mapping[str, Any] | None,
     accepted_counts: Mapping[str, int],
@@ -897,6 +1052,165 @@ def _source_join_errors(
         if payload.get(field) != expected_value:
             errors.append(f"{asset_id}:{field}_mismatch")
     return errors
+
+
+def _quality_findings(
+    assets: Mapping[str, Sequence[Mapping[str, Any]]],
+    policy: QualityAuditPolicy,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    findings: list[dict[str, Any]] = []
+    clusters: list[dict[str, Any]] = []
+    for asset_type in ("strategy", "template", "phrase"):
+        values = assets.get(asset_type, ())
+        id_field = _QUALITY_ID_FIELD[asset_type]
+        exact_groups: dict[tuple[str, str, str], list[str]] = {}
+        cluster_groups: dict[str, list[str]] = {}
+        for value in values:
+            asset_id = str(value[id_field])
+            score = float(value["quality_score"])
+            if score < policy.minimum_quality_score:
+                findings.append(
+                    _quality_finding(
+                        "low_quality_score",
+                        "warning",
+                        asset_type,
+                        [asset_id],
+                        observed=score,
+                        threshold=policy.minimum_quality_score,
+                    )
+                )
+            for field in _QUALITY_TEXT_FIELDS[asset_type]:
+                raw = value.get(field)
+                field_values = list(raw) if isinstance(raw, list) else [raw]
+                normalized_items = [
+                    _normalized_quality_text(item) for item in field_values if isinstance(item, str)
+                ]
+                if isinstance(raw, list) and len(set(normalized_items)) != len(normalized_items):
+                    findings.append(
+                        _quality_finding(
+                            "repeated_list_item",
+                            "error",
+                            asset_type,
+                            [asset_id],
+                            field=field,
+                            observed=len(normalized_items) - len(set(normalized_items)),
+                            threshold=0,
+                        )
+                    )
+                for item in field_values:
+                    if not isinstance(item, str):
+                        continue
+                    if len(item) > policy.maximum_text_field_characters:
+                        findings.append(
+                            _quality_finding(
+                                "oversized_text_field",
+                                "warning",
+                                asset_type,
+                                [asset_id],
+                                field=field,
+                                observed=len(item),
+                                threshold=policy.maximum_text_field_characters,
+                            )
+                        )
+                    repeated = _maximum_repeated_segment(item, policy)
+                    if repeated > policy.maximum_repeated_segment_occurrences:
+                        findings.append(
+                            _quality_finding(
+                                "repeated_text_segment",
+                                "error",
+                                asset_type,
+                                [asset_id],
+                                field=field,
+                                observed=repeated,
+                                threshold=policy.maximum_repeated_segment_occurrences,
+                            )
+                        )
+            primary = _normalized_quality_text(str(value[_QUALITY_PRIMARY_TEXT_FIELD[asset_type]]))
+            exact_groups.setdefault(
+                (str(value.get("category")), str(value.get("language")), primary), []
+            ).append(asset_id)
+            cluster_id = value.get("cluster_id")
+            if isinstance(cluster_id, str) and cluster_id:
+                cluster_groups.setdefault(cluster_id, []).append(asset_id)
+        for asset_ids in exact_groups.values():
+            if len(asset_ids) > 1:
+                findings.append(
+                    _quality_finding(
+                        "exact_duplicate_primary_text",
+                        "error",
+                        asset_type,
+                        sorted(asset_ids),
+                        observed=len(asset_ids),
+                        threshold=1,
+                    )
+                )
+        for cluster_id, asset_ids in cluster_groups.items():
+            if len(asset_ids) <= policy.maximum_near_duplicate_cluster_size:
+                continue
+            cluster = {
+                "asset_type": asset_type,
+                "cluster_id": cluster_id,
+                "size": len(asset_ids),
+                "asset_ids": sorted(asset_ids),
+            }
+            clusters.append(cluster)
+            findings.append(
+                _quality_finding(
+                    "near_duplicate_cluster",
+                    "warning",
+                    asset_type,
+                    sorted(asset_ids),
+                    observed=len(asset_ids),
+                    threshold=policy.maximum_near_duplicate_cluster_size,
+                )
+            )
+    findings.sort(
+        key=lambda value: (
+            str(value["code"]),
+            str(value["asset_type"]),
+            str(value.get("field") or ""),
+            tuple(value["asset_ids"]),
+        )
+    )
+    clusters.sort(key=lambda value: (str(value["asset_type"]), str(value["cluster_id"])))
+    return findings, clusters
+
+
+def _quality_finding(
+    code: str,
+    severity: str,
+    asset_type: str,
+    asset_ids: Sequence[str],
+    *,
+    observed: int | float,
+    threshold: int | float,
+    field: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "code": code,
+        "severity": severity,
+        "asset_type": asset_type,
+        "asset_ids": list(asset_ids),
+        "observed": observed,
+        "threshold": threshold,
+    }
+    if field is not None:
+        result["field"] = field
+    return result
+
+
+def _normalized_quality_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    return re.sub(r"\s+", " ", normalized).strip().casefold()
+
+
+def _maximum_repeated_segment(value: str, policy: QualityAuditPolicy) -> int:
+    segments = [
+        _normalized_quality_text(item)
+        for item in re.split(r"[.!?\u3002\uff01\uff1f;\uff1b\n]+", value)
+        if len(_normalized_quality_text(item)) >= policy.minimum_repeated_segment_characters
+    ]
+    return max(Counter(segments).values(), default=0)
 
 
 def _distribution(values: Sequence[Mapping[str, Any]], key: str) -> dict[str, int]:

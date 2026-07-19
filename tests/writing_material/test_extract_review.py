@@ -157,6 +157,19 @@ def test_release_and_pilot_cli_commands_keep_explicit_safety_inputs() -> None:
     )
     assert retrieval.writing_material_pilot_command == "evaluate-retrieval"
     assert retrieval.mode == "sparse"
+    quality = parser.parse_args(
+        [
+            "writing-material",
+            "pilot",
+            "audit-quality",
+            "--run-id",
+            "run-1",
+            "--output",
+            "quality.json",
+        ]
+    )
+    assert quality.writing_material_pilot_command == "audit-quality"
+    assert quality.output == Path("quality.json")
     extraction = parser.parse_args(
         [
             "writing-material",

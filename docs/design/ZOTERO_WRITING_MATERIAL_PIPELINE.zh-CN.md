@@ -370,6 +370,8 @@ knowledgehub writing-material pilot evaluate-retrieval \
   --mode sparse --output <retrieval-report.json>
 knowledgehub writing-material pilot evaluate --run-id <run-id> \
   --candidate-report <candidate.json> --retrieval-report <retrieval-report.json>
+knowledgehub writing-material pilot audit-quality --run-id <run-id> \
+  --output /tmp/writing-material-quality-audit.json
 ```
 
 Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖旧 run。非 dry-run OpenAI-compatible extraction 要求配置 approved model 和 base URL 环境变量；`deterministic_fixture` 只允许作为明确标记的测试输出。

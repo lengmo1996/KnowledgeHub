@@ -17,6 +17,7 @@ from knowledgehub.indexing.incremental import IncrementalChunkIndexer
 from knowledgehub.writing_rag.extract import WritingMaterialExtractionService
 from knowledgehub.writing_rag.materials import infer_writing_asset_type
 from knowledgehub.writing_rag.pilot import (
+    AcceptedCorpusQualityAuditor,
     CandidateRetrievalEvaluator,
     ControlledPilotEvaluator,
     PilotRetrievalOutcome,
@@ -133,6 +134,9 @@ def add_writing_material_parser(subparsers: Any) -> None:
     retrieval.add_argument("--queries", type=Path, required=True)
     retrieval.add_argument("--mode", choices=("sparse", "hybrid", "dense"), default="sparse")
     retrieval.add_argument("--output", type=Path)
+    quality = pilot_commands.add_parser("audit-quality")
+    quality.add_argument("--run-id", required=True)
+    quality.add_argument("--output", type=Path)
 
 
 def run_writing_material_command(args: argparse.Namespace) -> int:
@@ -321,6 +325,10 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                         _read_object(args.retrieval_report) if args.retrieval_report else None
                     ),
                 )
+            elif args.writing_material_pilot_command == "audit-quality":
+                result = AcceptedCorpusQualityAuditor(review).audit(args.run_id)
+                if args.output is not None:
+                    atomic_write_json(args.output, result, mode=0o600)
             else:
                 result = _run_pilot_retrieval_command(args, config, review)
                 if args.output is not None:

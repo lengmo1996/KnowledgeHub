@@ -396,3 +396,39 @@ Zotero Web API metadata + Nutstore WebDAV attachment mirror
 | rollback fallback | 旧 physical green/134 + 发布前 snapshot保留 |
 
 本阶段没有调用真实 LLM，没有重新 extraction，没有扩大30篇 pilot，没有处理完整 Zotero 库，没有删除旧索引、candidate、snapshot、manifest、cache或审核结果。生产变更仅为用户明确授权的 stage/promotion；原有 Zotero RAG、Code/技术知识库集合和旧 Writing physical collection未被覆盖。
+
+## 17. Phase 8 accepted corpus 质量复审（2026-07-19）
+
+### 17.1 新增能力
+
+- **IMPLEMENTED + VERIFIED**：`AcceptedCorpusQualityAuditor` 对 complete/source-verified accepted-v2 snapshot 进行确定性、无 LLM 的 corpus-level 审计。
+- **IMPLEMENTED + VERIFIED**：NFKC/whitespace/casefold 规范化、低质量分、重复片段、超长字段、重复列表项、精确主文本重复和多成员 lexical cluster 检测。
+- **IMPLEMENTED + VERIFIED**：`writing-material pilot audit-quality` 生成0600、fingerprinted、无 source/material text 的报告；不修改 review、accepted 或 index state。
+
+### 17.2 当前30篇结果
+
+报告 fingerprint：`af061ab96e18ffec3d9de059ae4424bd0033967b04c1f8c8a44db52a5ac289d0`。
+
+| 指标 | 结果 |
+|---|---|
+| assessed material | 973（strategy 280、template 423、phrase 270） |
+| flagged assets | 36，3.6999% |
+| repeated text segment | 6 errors；最大重复30次 |
+| oversized field | 26 warnings |
+| quality score `<0.75` | 8 warnings，0.8222% |
+| multi-member lexical cluster | 2组/4 assets，0.4111% |
+| exact primary-text duplicate | 0 |
+| repeated list item | 0 |
+
+因此 quality audit `passed=false`，建议 `manual_review_flagged_assets`。这不会否定 exact-span/source-join 或原8条 retrieval gate，但说明此前“全部 accepted”不能等同于逐项内容质量验证；当前 production 中确实包含需要复核的 derived material。
+
+### 17.3 验证与边界
+
+| 验证 | 结果 |
+|---|---|
+| `python -m pytest -q` | `539 passed in 27.65s` |
+| `python -m pytest tests/writing_material/test_quality_audit.py -q` | `4 passed` |
+| `python -m ruff check .` | passed |
+| `python -m mypy src` | passed，129 source files |
+
+没有调用 LLM、没有扩大selection、没有修改evidence、review events、accepted snapshot、Qdrant collection/alias、manifest或cache。现阶段不自动回滚或过滤生产结果；下一阶段先生成36项人工复核包，任何 edit/reject 和新 release 都必须保持 append-only 审核与显式 reviewer 决定。
