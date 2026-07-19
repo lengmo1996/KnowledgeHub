@@ -1,0 +1,40 @@
+schema_version: writing-taxonomy-v1
+categories:
+  - concept_introduction
+  - concept_definition
+  - context_setting
+  - importance_claim
+  - problem_statement
+  - gap_identification
+  - prior_work_limitation
+  - motivation
+  - incremental_novelty_positioning
+  - contribution_summary
+  - design_rationale
+  - mechanism_explanation
+  - transition
+  - comparison_with_prior_work
+  - result_reporting
+  - result_interpretation
+  - ablation_interpretation
+  - limitation_acknowledgment
+  - future_work
+risk_flags:
+  - unsupported_superlative
+  - exaggerated_novelty
+  - vague_claim
+  - missing_comparison
+  - causal_overclaim
+mvp_enabled:
+  - context_setting
+  - importance_claim
+  - problem_statement
+  - gap_identification
+  - prior_work_limitation
+  - motivation
+  - incremental_novelty_positioning
+  - contribution_summary
+  - result_reporting
+  - result_interpretation
+  - limitation_acknowledgment
+  - future_work

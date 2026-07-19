@@ -17,6 +17,7 @@ _FAMILIES: dict[str, set[str]] = {
         "introduction",
         "introduction and motivation",
         "overview",
+        "引",
         "引言",
         "绪论",
     },
@@ -63,6 +64,10 @@ _FAMILIES: dict[str, set[str]] = {
         "总结",
         "结论",
         "讨论",
+        "展望",
+        "未来展望",
+        "总结与展望",
+        "结论与展望",
     },
 }
 _PREFIX_FAMILIES: tuple[tuple[str, re.Pattern[str]], ...] = (

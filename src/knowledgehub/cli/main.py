@@ -10,6 +10,10 @@ from knowledgehub.cli.hub import add_hub_parsers, run_hub_command
 from knowledgehub.cli.project import add_project_parsers, run_project_command
 from knowledgehub.cli.rag import add_rag_parser, run_rag_command
 from knowledgehub.cli.v2 import add_v2_parsers, run_v2_command
+from knowledgehub.cli.writing_material import (
+    add_writing_material_parser,
+    run_writing_material_command,
+)
 from knowledgehub.mcp.cli import add_mcp_parser, run_mcp_command
 from knowledgehub.sources.zotero.cli import add_zotero_parser, run_zotero_command
 
@@ -31,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_hub_parsers(subparsers)
     add_v2_parsers(subparsers)
     add_project_parsers(subparsers)
+    add_writing_material_parser(subparsers)
     return parser
 
 
@@ -60,6 +65,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_v2_command(args)
     if args.source in {"workspace", "fixture", "project"}:
         return run_project_command(args)
+    if args.source == "writing-material":
+        return run_writing_material_command(args)
     parser.error(f"Unsupported source: {args.source}")
 
 

@@ -19,6 +19,10 @@ def test_hub_config_preserves_isolated_collections() -> None:
     assert config.knowledge_bases["literature"].collection == "zotero_papers_qwen3_4b_1024_v2"
     assert config.knowledge_bases["code"].collection == "knowledgehub_code_qwen3_4b_1024_v1"
     assert config.knowledge_bases["writing"].collection == "knowledgehub_writing_qwen3_4b_1024_v1"
+    assert config.writing_materials.classification_max_tokens == 8192
+    assert config.writing_materials.abstraction_max_tokens == 8192
+    assert config.writing_materials.classification_max_sentences_per_request == 8
+    assert config.writing_materials.abstraction_batch_size == 8
 
 
 def test_knowledge_document_requires_one_content_source(tmp_path: Path) -> None:

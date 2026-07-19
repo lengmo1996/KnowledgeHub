@@ -51,7 +51,9 @@ class HubValidator:
                 # V1 wrote one library-level manifest. V2 version-scoped
                 # manifests supersede it without deleting the frozen file.
                 continue
-            for line_number, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
+            for line_number, line in enumerate(
+                manifest.read_text(encoding="utf-8").splitlines(), 1
+            ):
                 if not line.strip():
                     continue
                 checked += 1
@@ -70,7 +72,11 @@ class HubValidator:
                         if not present:
                             errors.append(f"{manifest}:{line_number} missing {field}")
                     path = value.get("content_path")
-                    if path and Path(path).is_file() and sha256_file(path) != value.get("content_hash"):
+                    if (
+                        path
+                        and Path(path).is_file()
+                        and sha256_file(path) != value.get("content_hash")
+                    ):
                         errors.append(f"{manifest}:{line_number} content hash mismatch")
                 except (ValueError, KeyError, json.JSONDecodeError):
                     errors.append(f"{manifest}:{line_number} invalid record")
@@ -113,12 +119,7 @@ class HubValidator:
                 if value.get("content_hash") != sha256_json(dependencies):
                     errors.append(f"{manifest} content_hash mismatch")
                 marker = (
-                    self.code_root
-                    / "sources"
-                    / "repositories"
-                    / library
-                    / version
-                    / "current.json"
+                    self.code_root / "sources" / "repositories" / library / version / "current.json"
                 )
                 self._validate_dependency_marker(marker, commit, value, manifest, errors)
                 for index, dependency in enumerate(dependencies, 1):
@@ -136,7 +137,13 @@ class HubValidator:
                 checked += 1
                 try:
                     value = json.loads(line)
-                    for field in ("writing_id", "source_paper_id", "writing_function", "abstract_pattern", "content_hash"):
+                    for field in (
+                        "writing_id",
+                        "source_paper_id",
+                        "writing_function",
+                        "abstract_pattern",
+                        "content_hash",
+                    ):
                         if not value.get(field):
                             errors.append(f"{path}:{line_number} missing {field}")
                 except json.JSONDecodeError:
@@ -144,6 +151,23 @@ class HubValidator:
         else:
             errors.append(f"missing writing manifest: {path}")
         return self._result("writing", checked, errors)
+
+    @staticmethod
+    def writing_material_run(
+        data_root: Path,
+        literature_data_dir: Path,
+        run_id: str,
+        *,
+        verify_source: bool = True,
+    ) -> dict[str, Any]:
+        """Validate extraction, provenance, review events and accepted snapshot links."""
+
+        from knowledgehub.writing_rag.review import WritingMaterialReviewService
+
+        return WritingMaterialReviewService(data_root, literature_data_dir).validate(
+            run_id,
+            verify_source=verify_source,
+        )
 
     def index(
         self,
@@ -283,9 +307,7 @@ class HubValidator:
             errors.append(f"{prefix} confidence is outside [0, 1]")
 
     @staticmethod
-    def _index_state(
-        path: Path, errors: list[str]
-    ) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    def _index_state(path: Path, errors: list[str]) -> tuple[dict[str, dict[str, Any]], set[str]]:
         if not path.is_file():
             errors.append(f"missing index state: {path}")
             return {}, set()
@@ -312,8 +334,7 @@ class HubValidator:
                     if not value.get("processor_version"):
                         errors.append(f"{path} {document_id} missing processor_version")
                 tombstones = {
-                    str(row[0])
-                    for row in connection.execute("SELECT document_id FROM tombstones")
+                    str(row[0]) for row in connection.execute("SELECT document_id FROM tombstones")
                 }
         except sqlite3.Error as error:
             errors.append(f"unreadable index state {path}: {error}")
@@ -328,9 +349,7 @@ class HubValidator:
         errors.extend(f"tombstone has no state document: {value}" for value in sorted(unknown))
         return rows, tombstones
 
-    def _source_records(
-        self, knowledge_base: str, errors: list[str]
-    ) -> dict[str, dict[str, Any]]:
+    def _source_records(self, knowledge_base: str, errors: list[str]) -> dict[str, dict[str, Any]]:
         records: dict[str, dict[str, Any]] = {}
         if knowledge_base == "code":
             manifests = self.code_normalized_root.glob("**/*.jsonl")
@@ -468,9 +487,7 @@ class HubValidator:
         }
 
     @staticmethod
-    def _read_chunks(
-        path: Path, errors: list[str]
-    ) -> list[tuple[int, dict[str, Any]]]:
+    def _read_chunks(path: Path, errors: list[str]) -> list[tuple[int, dict[str, Any]]]:
         values: list[tuple[int, dict[str, Any]]] = []
         try:
             lines = path.read_text(encoding="utf-8").splitlines()

@@ -1,0 +1,62 @@
+{
+  "fixture_schema": "knowledgehub-provenance-fixture-v1",
+  "provenance": {
+    "parser_name": "docling",
+    "parser_version": "2.112.0",
+    "structured_schema_name": "DoclingDocument",
+    "structured_schema_version": "1.10.0",
+    "charspan_semantics": "python-orig-half-open"
+  },
+  "document_id": "zotero:user:fixture:ITEMKEY:ATTACHKEY:0",
+  "parse_fingerprint": "fixture-parse-1",
+  "structured": {
+    "schema_name": "DoclingDocument",
+    "version": "1.10.0",
+    "body": {
+      "children": [
+        {"cref": "#/texts/0"},
+        {"cref": "#/texts/1"},
+        {"cref": "#/texts/2"},
+        {"cref": "#/texts/3"}
+      ]
+    },
+    "groups": [],
+    "texts": [
+      {
+        "self_ref": "#/texts/0",
+        "label": "section_header",
+        "orig": "Introduction",
+        "text": "Introduction",
+        "prov": []
+      },
+      {
+        "self_ref": "#/texts/1",
+        "label": "text",
+        "orig": "Alpha βeta.\nGamma delta。",
+        "text": "Alpha βeta. Gamma delta。",
+        "prov": [
+          {"page_no": 1, "charspan": [0, 11], "bbox": {"l": 1, "t": 1, "r": 9, "b": 2}},
+          {"page_no": 2, "charspan": [11, 24], "bbox": {"l": 1, "t": 1, "r": 9, "b": 2}}
+        ]
+      },
+      {
+        "self_ref": "#/texts/2",
+        "label": "text",
+        "orig": "echo echo",
+        "text": "echo echo",
+        "prov": [
+          {"page_no": 2, "charspan": [0, 9], "bbox": {"l": 1, "t": 3, "r": 9, "b": 4}}
+        ]
+      },
+      {
+        "self_ref": "#/texts/3",
+        "label": "text",
+        "orig": "multi-\nmodal ﬁnding",
+        "text": "multimodal finding",
+        "prov": [
+          {"page_no": 3, "charspan": [0, 19], "bbox": {"l": 1, "t": 5, "r": 9, "b": 6}}
+        ]
+      }
+    ]
+  }
+}

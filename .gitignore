@@ -71,6 +71,11 @@ coverage.xml
 # Explicitly supplied Personal Writing Profile drafts stay local.
 /personal-writing-profile*.md
 
+# Writing-material pilot selections, review decisions, and source excerpts stay local.
+/papers.jsonl
+/decisions-functional-test.jsonl
+/review-sample-10.md
+
 # Zotero/WebDAV and extracted binary payloads are never source artifacts.
 *.zip
 *.prop

@@ -26,3 +26,5 @@ writing:
   processor_version: rules-v2
   default_limit: 5
   minimum_quality: 0.45
+writing_materials:
+  config: writing_materials.yaml

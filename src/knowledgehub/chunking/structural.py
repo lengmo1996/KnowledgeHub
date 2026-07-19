@@ -14,6 +14,7 @@ from knowledgehub.pipeline.models import ChunkRecord, ParsedDocument, SourceDocu
 
 _CHUNK_NAMESPACE = uuid.UUID("81ac64a2-e34c-5a35-b7f0-082fc48e8601")
 _PAGE_MARKER = re.compile(r"<!--\s*page:(\d+)\s*-->")
+CHUNK_PROVENANCE_VERSION = "literature-chunk-provenance-v1"
 
 
 class StructuralChunker:
@@ -73,6 +74,7 @@ class StructuralChunker:
         document_chunk_config = document_chunk_fingerprint(self.config, parsed.parse_fingerprint)
         for index, (text, metadata) in enumerate(rows):
             pages = _page_numbers(metadata)
+            doc_item_refs = _doc_item_refs(metadata)
             token_count = self._count_tokens(text)
             fingerprint = sha256_json(
                 {
@@ -109,7 +111,15 @@ class StructuralChunker:
                         "tags": list(document.tags),
                         "collection_keys": list(document.collection_keys),
                         "collection_paths": list(document.collection_paths),
-                    },
+                    }
+                    | (
+                        {
+                            "chunk_provenance_version": CHUNK_PROVENANCE_VERSION,
+                            "doc_item_refs": list(doc_item_refs),
+                        }
+                        if doc_item_refs
+                        else {}
+                    ),
                 )
             )
         return records
@@ -157,3 +167,25 @@ def _page_numbers(metadata: Mapping[str, Any]) -> list[int]:
 def _headings(metadata: Mapping[str, Any]) -> tuple[str, ...]:
     headings = metadata.get("headings") or []
     return tuple(str(value) for value in headings) if isinstance(headings, list) else ()
+
+
+def _doc_item_refs(metadata: Mapping[str, Any]) -> tuple[str, ...]:
+    """Retain only stable Docling references needed for a provenance join.
+
+    Chunk metadata must not duplicate source text or guess offsets.  The
+    writing-material reader joins these references back to the immutable
+    parsed Docling artifact and fails closed when a reference is missing or
+    appears in more than one chunk.
+    """
+
+    result: set[str] = set()
+    items = metadata.get("doc_items")
+    if not isinstance(items, list):
+        return ()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        self_ref = item.get("self_ref")
+        if isinstance(self_ref, str) and self_ref.startswith("#/"):
+            result.add(self_ref)
+    return tuple(sorted(result))

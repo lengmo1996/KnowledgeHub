@@ -1,0 +1,38 @@
+schema_version: 1
+data_root: /data/KnowledgeHub/writing-materials
+literature_data_dir: /data/KnowledgeHub/rag/zotero
+taxonomy_path: writing/taxonomy-v1.yaml
+prompts:
+  classify: writing/prompts/classify-v9.md
+  abstract: writing/prompts/abstract-v7.md
+provider: openai_compatible
+base_url_env: KH_WRITING_MATERIAL_LLM_BASE_URL
+api_key_env: KH_WRITING_MATERIAL_LLM_API_KEY
+# The model name must match the vLLM --served-model-name value.
+model: qwen3-32b-awq
+timeout_seconds: 600
+max_retries: 2
+batch_size: 4
+classification_max_sentences_per_request: 8
+abstraction_batch_size: 8
+classification_max_tokens: 8192
+abstraction_max_tokens: 8192
+minimum_quality: 0.65
+minimum_provenance_coverage: 0.80
+allowed_sections:
+  - introduction
+  - experiment
+  - conclusion
+enabled_categories:
+  - context_setting
+  - importance_claim
+  - problem_statement
+  - gap_identification
+  - prior_work_limitation
+  - motivation
+  - incremental_novelty_positioning
+  - contribution_summary
+  - result_reporting
+  - result_interpretation
+  - limitation_acknowledgment
+  - future_work
