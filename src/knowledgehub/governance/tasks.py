@@ -407,7 +407,14 @@ class TaskExecutor:
         status = str(result.get("status") or "success")
         if status == "partial":
             return "partial"
-        if status in {"success", "planned", "skipped", "completed", "available"}:
+        if status in {
+            "success",
+            "planned",
+            "skipped",
+            "completed",
+            "available",
+            "validated",
+        }:
             return "completed"
         return "failed"
 

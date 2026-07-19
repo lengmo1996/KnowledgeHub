@@ -93,6 +93,21 @@ def test_executor_failure_is_recorded_and_next_attempt_is_a_retry(tmp_path: Path
     ]
 
 
+def test_executor_records_validated_release_as_completed(tmp_path: Path) -> None:
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    result = TaskExecutor(store).execute(
+        "writing_release_build",
+        lambda: {"status": "validated", "promotion_eligible": True},
+        knowledge_base="writing",
+        inputs={"candidate_collection": "writing-release-test"},
+        lock_keys=("index:writing:writing-release-test",),
+    )
+
+    assert result["task"]["status"] == "completed"
+    task_id = str(result["task"]["task_id"])
+    assert store.list_attempts(task_id)[0]["status"] == "completed"
+
+
 def test_executor_interrupt_is_recorded_and_releases_locks(tmp_path: Path) -> None:
     store = TaskStore(tmp_path / "tasks.sqlite3")
 
