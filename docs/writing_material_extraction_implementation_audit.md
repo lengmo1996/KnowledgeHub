@@ -456,4 +456,14 @@ Zotero Web API metadata + Nutstore WebDAV attachment mirror
 
 fixture测试覆盖legacy与两个revision均不被覆盖、current pointer权限、null/缺项/stale拒绝、source revalidation和不创建index。定向writing-material回归121 passed、全仓pytest 544 passed、Ruff lint passed、mypy 129 source files passed、`git diff --check` passed。新代码只读验证生产run `20260719T064746Z-f99463512f16`仍为source verified、errors=[]、index eligible，证明无pointer的历史accepted-v2无需迁移。
 
-本阶段没有对36项真实packet执行导入，没有调用LLM，没有扩大30篇selection，没有修改Zotero、Qdrant collection/alias、生产索引、现有run/accepted、cache或manifest。生产alias仍指向既有quality-v2 release。审计中Phase 8B所述“fixed accepted会覆盖”的实现缺口已经关闭，但真实内容质量决定仍为**BLOCKED_ON_REVIEWER_DECISIONS**，不得标记为完成。
+本阶段没有对36项真实packet执行导入，没有调用LLM，没有扩大30篇selection，没有修改Zotero、Qdrant collection/alias、生产索引、现有run/accepted、cache或manifest。生产alias仍指向既有quality-v2 release。审计中Phase 8B所述“fixed accepted会覆盖”的实现缺口已经关闭；本节落笔时真实内容质量决定仍为**BLOCKED_ON_REVIEWER_DECISIONS**，该状态已由下节Phase 8D解除。
+
+## 20. Phase 8D 全部 accepted 质量决定导入（2026-07-19）
+
+- **EXTERNAL_VERIFIED**：用户明确决定36项全部accepted；0600 decisions JSONL为36条完整、无edits的`lengmo`决定，SHA-256 `618427b17e1ad1b4a2da39eb95f50bd2c3967a237ca85c4cc0c1e4bf2fa3d1db`。
+- **VERIFIED**：dry-run为planned/36 accepted/source verified/zero write，fingerprint `b85063257e46d794a66d2d5f74c70aa5c41335dc77340f4af73c6fc207faefc8`。
+- **EXTERNAL_VERIFIED**：Task `938aa58e-1f4d-4842-a46c-51c561d2f99e` completed并追加36 events；新revision `rev-2519697bb0043f04f9009e3c`完整、index eligible，import fingerprint `e8f75364ad257e20321e9097664995d5e90f0200bce7d34f716826a3b7955a73`。
+- **VERIFIED**：legacy accepted manifest仍为`2b54fae...a065`，新manifest为`5d01160...dde1`，0600 current pointer为`cd11796...a278`；validate source errors=[]，旧packet自动stale。
+- **QUALITY RISK ACCEPTED**：post-accept audit仍为36 flagged/42 findings、passed=false，fingerprint `d83d80bb48fce854b0ec69fc93e10c8c090f037e01b6ca8fd68d4ebbb5a1354d`。这是用户选择保留内容的真实结果；不得把accepted decision伪装成内容规则通过。
+
+没有调用LLM、没有扩大selection、没有修改evidence/Zotero/cache/Qdrant或执行index/release。磁盘alias state仍记录quality-v2 active/1107；Qdrant 6333当时离线，故未完成live collection读回。人工审核阻塞已解除，当前保守终态为`stop_at_acknowledged_quality_findings`。

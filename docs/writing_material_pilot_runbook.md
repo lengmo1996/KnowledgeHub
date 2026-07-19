@@ -197,6 +197,8 @@ knowledgehub writing-material review apply-quality \
 
 导入会追加review event，并将新complete projection写入`accepted-revisions/rev-.../`；历史`accepted/`和旧revision不覆盖。0600 `accepted-current.json`记录当前revision，所有candidate/release/pilot读取器按review events解析并复验当前snapshot。导入成功后原packet会因accepted manifest SHA变化而失效，必须重新运行quality audit；该命令不创建candidate、不修改索引，也不授权stage/promotion。
 
+如果reviewer对flagged items全部选择`accepted`，重新quality audit仍会报告同样的内容finding并保持`passed=false`，因为内容没有发生edit/reject。这应记录为人工接受已知质量风险；不能篡改阈值或报告使其显示通过，也不应循环复用已stale的旧packet要求重复审核。只有material内容实际变化时，才需要基于新snapshot另行评估candidate/release。
+
 ## 5. 默认停止条件
 
 - selection 不在 30–50 篇；

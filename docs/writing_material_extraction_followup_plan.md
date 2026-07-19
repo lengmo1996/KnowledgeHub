@@ -736,7 +736,7 @@ Phase 7A/7B 已形成闭环。生产 Writing alias 已部署并保留 rollback f
 5. [x] 决定文件必须对 packet items 一一完整覆盖，拒绝缺失、额外、重复、null、stale 和 reviewer 漂移；普通 `accepted` 会在必要时规范化为保留既有人工 edit 的事件，避免二次审核把旧 edit 静默还原为 raw material。
 6. [x] `--dry-run` 完成全量结构/source/current-snapshot preflight 但零写入；真实导入必须额外 `--yes`，追加 review events 并创建新 revision。导入后旧 packet 因 accepted manifest SHA 变化自动失效。
 7. [x] fixture 验证 dry-run 零写入、显式确认、历史 legacy/revision 字节不变、current pointer 0600、旧 packet stale、null/缺项拒绝、source validation 与 index isolation；定向 writing-material 回归121 passed、全仓pytest 544 passed、Ruff lint通过、mypy 129 source files通过。
-8. [ ] reviewer `lengmo` 尚未填写v2 packet的36项决定；因此没有对真实run执行apply-quality，没有新建candidate、stage/promote或改动生产alias。
+8. [x] reviewer `lengmo` 于后续Phase 8D明确决定36项全部accepted；本Phase 8C结束时尚未执行的真实导入已按下节记录完成。没有新建candidate、stage/promote或改动生产alias。
 
 实际修改文件：`src/knowledgehub/writing_rag/review.py`、`src/knowledgehub/writing_rag/pilot.py`、`src/knowledgehub/writing_rag/release.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_quality_audit.py`、`tests/writing_material/test_extract_review.py`、本计划、审计补充、设计文档和pilot runbook。
 
@@ -745,3 +745,18 @@ Phase 7A/7B 已形成闭环。生产 Writing alias 已部署并保留 rollback f
 兼容性实证：使用新代码对生产run `20260719T064746Z-f99463512f16`执行只读、含source检查的`writing-material validate`，结果`status=success`、`errors=[]`、`index_eligible=true`、2496 accepted；没有为历史run补写pointer或revision。
 
 下一阶段为 Phase 8D：由`lengmo`逐项填写36条决定，先运行`apply-quality --dry-run`并人工核对计数，再单独批准`--yes`导入。导入后重新执行quality audit；只有新audit与检索/source-join通过，才可另行提议新的隔离candidate和release，不能复用本阶段作为索引授权。
+
+### Phase 8D：36项全部 accepted 决定导入（2026-07-19）
+
+用户明确指示“全部accept”，因此本阶段只把36个flagged assets保留为accepted，不采用packet中6项确定性去重edit，也不reject低分、超长或cluster项。
+
+1. [x] 从v2 packet机械生成0600 decisions JSONL，36/36均为`decision=accepted`、`reviewer=lengmo`、非空reason，不含`edits`或多余字段；路径`/tmp/knowledgehub-writing-material-phase6b-20260718/quality-review-v2-20260719T064746Z-f99463512f16/quality-decisions-all-accepted.jsonl`，SHA-256 `618427b17e1ad1b4a2da39eb95f50bd2c3967a237ca85c4cc0c1e4bf2fa3d1db`。
+2. [x] `apply-quality --dry-run`返回`status=planned`、accepted=36、source_verified=true、writes=false；绑定旧accepted manifest `2b54fae...a065`、packet `e708ad9...ae50`，dry-run fingerprint `b85063257e46d794a66d2d5f74c70aa5c41335dc77340f4af73c6fc207faefc8`。
+3. [x] 按用户显式决定执行`--yes`：Task `938aa58e-1f4d-4842-a46c-51c561d2f99e` completed，追加36条event，import artifact fingerprint `e8f75364ad257e20321e9097664995d5e90f0200bce7d34f716826a3b7955a73`。
+4. [x] 新complete snapshot为`accepted-revisions/rev-2519697bb0043f04f9009e3c`，manifest SHA-256 `5d0116050d8cedceb25ea6879d957a4d6b0276f7f4e62f9a31d5d9ce4955dde1`；accepted=2496、pending/edited/rejected=0，index_eligible=true。
+5. [x] 0600 `accepted-current.json` fingerprint `cd11796213e0eed62e7b0f203332296634ad3ff2fd6cbd4f8ec029be3d85a278`正确指向新revision；历史`accepted/manifest.json`仍为`2b54fae...a065`，未覆盖。
+6. [x] 导入后source validation为`status=success`、`errors=[]`、source_verified/index_eligible=true；旧v2 packet再次dry-run被`quality review packet is invalid or stale`拒绝。
+7. [x] post-accept只读quality audit绑定新manifest，fingerprint `d83d80bb48fce854b0ec69fc93e10c8c090f037e01b6ca8fd68d4ebbb5a1354d`；仍为36 assets/42 findings、`passed=false`，因为全部accept刻意保留了原低分、超长、cluster和重复内容。这是已知风险被人工接受，不是质量规则消失或修复。
+8. [x] 未调用LLM、未处理新文献、未修改evidence、cache、Zotero或Qdrant索引；磁盘alias state仍为active quality-v2/1107。Qdrant服务当时未监听6333，因此未做live collection读回，但本阶段没有执行任何index/release命令。
+
+Phase 8D结论：人工审核任务已完成，状态为`stop_at_acknowledged_quality_findings`。由于36项全部accepted且派生material内容未变，不需要仅为相同内容立即重建生产索引。若未来要求quality audit本身区分“未审核finding”和“已审核接受finding”，应作为独立Phase 8E扩展acknowledgement contract；不得把人工接受改写成`passed=true`。

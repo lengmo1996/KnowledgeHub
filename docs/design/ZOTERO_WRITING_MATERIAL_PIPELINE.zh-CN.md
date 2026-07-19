@@ -384,6 +384,8 @@ Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖
 
 二次人工审核采用append-only event与版本化projection：首个历史`accepted/`保留，后续完整snapshot写入`accepted-revisions/rev-<fingerprint>/`，并由0600 `accepted-current.json`记录。读取逻辑根据review events/projection hash解析当前revision并校验pointer，不能通过替换pointer复用旧定位或旧审核状态。质量决定导入必须先`apply-quality --dry-run`，真实导入另需`--yes`；它不修改evidence，也不创建或发布索引。
 
+人工`accepted`表示在知悉finding后保留当前material，不表示确定性quality rule自动通过。若全部flagged items均accepted，post-review audit可以继续`passed=false`，但审核阻塞已经解除；系统必须保留finding与review event两类事实，不能为了闭环静默改写内容或审计结果。
+
 ## 15. 测试策略与 MVP 步骤
 
 自动测试覆盖：
