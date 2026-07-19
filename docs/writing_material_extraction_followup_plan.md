@@ -724,3 +724,24 @@ Phase 7A/7B 已形成闭环。生产 Writing alias 已部署并保留 rollback f
 实际修改文件：`src/knowledgehub/writing_rag/pilot.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_quality_audit.py`、`tests/writing_material/test_extract_review.py`、设计文档、pilot runbook、本计划与审计补充。
 
 下一阶段为 Phase 8C：先实现不可覆盖的版本化 accepted projection 与显式二次审核导入，再由 reviewer `lengmo` 对36项填写决定。没有显式决定前不构建新candidate、不stage/promote；当前30篇范围继续不扩量。
+
+### Phase 8C：版本化 accepted projection 与质量决定安全导入（2026-07-19）
+
+本阶段拆分并完成“导入基础设施”闭环，不代替 reviewer 填写36项决定，也不授权 candidate/release 变更。
+
+1. [x] `WritingMaterialReviewService` 保留首个历史 `accepted/`，后续 projection 写入 `accepted-revisions/rev-<fingerprint>/`；revision 由 review events、projection 和 completeness 确定，已有目录不覆盖。
+2. [x] 新增0600 `accepted-current.json` 指针；读取时以 append-only events 的确定性 projection 解析 revision，指针只作为可校验的当前状态记录，缺失指针的历史 accepted-v2 继续兼容。
+3. [x] candidate index、release、pilot quality/retrieval/source join 和 CLI input manifest 全部改为通过 `accepted_dir(run_id)` 解析当前 complete snapshot，不再硬编码 `accepted/`。
+4. [x] 新增 `writing-material review apply-quality`：严格复验 packet fingerprint/schema/run/reviewer/current accepted manifest、每项 immutable raw asset `based_on_hash`、pristine null draft 和无 evidence/provenance 内容声明。
+5. [x] 决定文件必须对 packet items 一一完整覆盖，拒绝缺失、额外、重复、null、stale 和 reviewer 漂移；普通 `accepted` 会在必要时规范化为保留既有人工 edit 的事件，避免二次审核把旧 edit 静默还原为 raw material。
+6. [x] `--dry-run` 完成全量结构/source/current-snapshot preflight 但零写入；真实导入必须额外 `--yes`，追加 review events 并创建新 revision。导入后旧 packet 因 accepted manifest SHA 变化自动失效。
+7. [x] fixture 验证 dry-run 零写入、显式确认、历史 legacy/revision 字节不变、current pointer 0600、旧 packet stale、null/缺项拒绝、source validation 与 index isolation；定向 writing-material 回归121 passed、全仓pytest 544 passed、Ruff lint通过、mypy 129 source files通过。
+8. [ ] reviewer `lengmo` 尚未填写v2 packet的36项决定；因此没有对真实run执行apply-quality，没有新建candidate、stage/promote或改动生产alias。
+
+实际修改文件：`src/knowledgehub/writing_rag/review.py`、`src/knowledgehub/writing_rag/pilot.py`、`src/knowledgehub/writing_rag/release.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_quality_audit.py`、`tests/writing_material/test_extract_review.py`、本计划、审计补充、设计文档和pilot runbook。
+
+设计偏差：原review contract把event视为append-only，但把projection视为可重建的固定目录。本阶段没有迁移或重写既有`accepted/`，而是在首次二次决定时开始版本化；current snapshot的权威解析来自events/projection hash，避免一次指针写失败后把旧revision误当当前。没有引入新依赖、数据库或队列。
+
+兼容性实证：使用新代码对生产run `20260719T064746Z-f99463512f16`执行只读、含source检查的`writing-material validate`，结果`status=success`、`errors=[]`、`index_eligible=true`、2496 accepted；没有为历史run补写pointer或revision。
+
+下一阶段为 Phase 8D：由`lengmo`逐项填写36条决定，先运行`apply-quality --dry-run`并人工核对计数，再单独批准`--yes`导入。导入后重新执行quality audit；只有新audit与检索/source-join通过，才可另行提议新的隔离candidate和release，不能复用本阶段作为索引授权。

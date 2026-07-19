@@ -175,6 +175,28 @@ knowledgehub writing-material pilot render-quality-review \
 
 重复片段只提出去重 edit；末尾如果是已出现句子的截断前缀会一并移除。near-duplicate 只建议比较后 keep/reject，低分和单纯超长项保留人工判断。生成复核包不会追加 review event、重写 accepted projection 或修改索引。
 
+人工决定应另存为JSONL，每个packet item恰好一行；从`decision_draft`复制后必须填写`decision`和`reason`，并核对`reviewer`。不要修改packet fingerprint或`based_on_hash`。先执行只读preflight：
+
+```text
+knowledgehub writing-material review apply-quality \
+  --run-id RUN_ID \
+  --packet /tmp/writing-material-quality-review/quality-review-packet.json \
+  --decisions /tmp/writing-material-quality-decisions.jsonl \
+  --dry-run
+```
+
+只有dry-run的`status=planned`、decision count与packet flagged count一致，且人工确认keep/edit/reject分布后，才可在独立授权下导入：
+
+```text
+knowledgehub writing-material review apply-quality \
+  --run-id RUN_ID \
+  --packet /tmp/writing-material-quality-review/quality-review-packet.json \
+  --decisions /tmp/writing-material-quality-decisions.jsonl \
+  --yes
+```
+
+导入会追加review event，并将新complete projection写入`accepted-revisions/rev-.../`；历史`accepted/`和旧revision不覆盖。0600 `accepted-current.json`记录当前revision，所有candidate/release/pilot读取器按review events解析并复验当前snapshot。导入成功后原packet会因accepted manifest SHA变化而失效，必须重新运行quality audit；该命令不创建candidate、不修改索引，也不授权stage/promotion。
+
 ## 5. 默认停止条件
 
 - selection 不在 30–50 篇；

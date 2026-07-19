@@ -14,6 +14,7 @@ from knowledgehub.writing_rag.pilot import (
     _normalized_quality_text,
     _quality_findings,
 )
+from knowledgehub.writing_rag.review import ReviewValidationError
 
 from .test_release import _reviewed_run
 
@@ -165,15 +166,16 @@ def test_quality_review_packet_proposes_edits_without_changing_review_state(
     review.apply(run_id, decision_path)
     audit = AcceptedCorpusQualityAuditor(review).audit(run_id)
     assert audit["counts"]["findings"] == {"repeated_text_segment": 1}
+    accepted_dir = review.accepted_dir(run_id)
     evidence = json.loads(
-        (run_dir / "accepted" / "evidence.jsonl")
+        (accepted_dir / "evidence.jsonl")
         .read_text(encoding="utf-8")
         .splitlines()[0]
     )
     original_text = evidence["original_text"]
     protected_paths = [
         run_dir / "review-events.jsonl",
-        *(path for path in (run_dir / "accepted").iterdir() if path.is_file()),
+        *(path for path in accepted_dir.iterdir() if path.is_file()),
     ]
     before = {str(path): path.read_bytes() for path in protected_paths}
 
@@ -246,4 +248,163 @@ def test_quality_review_packet_rejects_tampered_or_unknown_findings(tmp_path: Pa
             quality_report=tampered,
             reviewer="lengmo",
             output_dir=tmp_path / "tampered-report",
+        )
+
+
+def test_quality_review_import_is_dry_run_first_versioned_and_stale_safe(
+    tmp_path: Path,
+) -> None:
+    review, run_id = _reviewed_run(tmp_path)
+    run_dir = review.run_dir(run_id)
+    legacy_dir = review.accepted_dir(run_id)
+    legacy_before = {
+        path.name: path.read_bytes() for path in legacy_dir.iterdir() if path.is_file()
+    }
+    raw_template = review._records(run_dir)["template"][0]
+    repeated_segment = "This guidance sentence is deliberately repeated for review."
+    fixture_decision = {
+        "asset_id": raw_template["template_id"],
+        "decision": "edited",
+        "based_on_hash": sha256_json(raw_template),
+        "reviewer": "fixture-reviewer",
+        "reason": "create a bounded quality fixture",
+        "edits": {
+            "claim_strength_guidance": " ".join([repeated_segment] * 3),
+            "constraints": ["Keep this prior reviewer constraint."],
+        },
+    }
+    fixture_path = tmp_path / "quality-fixture-decision.jsonl"
+    fixture_path.write_text(json.dumps(fixture_decision) + "\n", encoding="utf-8")
+    review.apply(run_id, fixture_path)
+    first_revision = review.accepted_dir(run_id)
+    assert first_revision != legacy_dir
+    assert first_revision.parent.name == "accepted-revisions"
+    first_revision_before = {
+        path.name: path.read_bytes() for path in first_revision.iterdir() if path.is_file()
+    }
+
+    audit = AcceptedCorpusQualityAuditor(review).audit(run_id)
+    packet = AcceptedCorpusQualityReviewRenderer(review).render(
+        run_id,
+        quality_report=audit,
+        reviewer="lengmo",
+        output_dir=tmp_path / "quality-import",
+    )
+    packet_path = Path(packet["packet_path"])
+    decision = dict(packet["items"][0]["decision_draft"])
+    decision["decision"] = "edited"
+    decision["reason"] = "remove repeated generated guidance"
+    decisions_path = tmp_path / "quality-decisions.jsonl"
+    decisions_path.write_text(json.dumps(decision) + "\n", encoding="utf-8")
+    events_before = (run_dir / "review-events.jsonl").read_bytes()
+    index_root = review.data_root / "index-candidates"
+    index_existed = index_root.exists()
+
+    planned = review.apply_quality_review(
+        run_id,
+        packet_path=packet_path,
+        decisions_path=decisions_path,
+        dry_run=True,
+    )
+
+    assert planned["status"] == "planned"
+    assert planned["decision_count"] == 1
+    assert planned["writes_performed"] is False
+    assert planned["review_events_modified"] is False
+    assert planned["accepted_snapshot_modified"] is False
+    assert planned["index_modified"] is False
+    assert (run_dir / "review-events.jsonl").read_bytes() == events_before
+    assert review.accepted_dir(run_id) == first_revision
+    with pytest.raises(ReviewValidationError, match="explicit confirmation"):
+        review.apply_quality_review(
+            run_id,
+            packet_path=packet_path,
+            decisions_path=decisions_path,
+        )
+
+    applied = review.apply_quality_review(
+        run_id,
+        packet_path=packet_path,
+        decisions_path=decisions_path,
+        confirmed=True,
+    )
+
+    second_revision = review.accepted_dir(run_id)
+    assert applied["status"] == "success"
+    assert applied["imported"] == 1
+    assert applied["review_events_modified"] is True
+    assert applied["accepted_snapshot_modified"] is True
+    assert applied["index_modified"] is False
+    assert second_revision != first_revision
+    assert {
+        path.name: path.read_bytes() for path in legacy_dir.iterdir() if path.is_file()
+    } == legacy_before
+    assert {
+        path.name: path.read_bytes() for path in first_revision.iterdir() if path.is_file()
+    } == first_revision_before
+    accepted_template = json.loads(
+        (second_revision / "templates.jsonl").read_text(encoding="utf-8")
+    )
+    assert accepted_template["claim_strength_guidance"].count(repeated_segment) == 1
+    assert accepted_template["constraints"] == ["Keep this prior reviewer constraint."]
+    pointer = run_dir / "accepted-current.json"
+    assert oct(pointer.stat().st_mode & 0o777) == "0o600"
+    assert review.validate(run_id)["index_eligible"] is True
+    assert index_root.exists() is index_existed
+    with pytest.raises(ReviewValidationError, match="invalid or stale"):
+        review.apply_quality_review(
+            run_id,
+            packet_path=packet_path,
+            decisions_path=decisions_path,
+            dry_run=True,
+        )
+
+
+def test_quality_review_import_rejects_null_or_incomplete_decisions(tmp_path: Path) -> None:
+    review, run_id = _reviewed_run(tmp_path)
+    run_dir = review.run_dir(run_id)
+    raw_template = review._records(run_dir)["template"][0]
+    repeated = "This guidance sentence is deliberately repeated for review."
+    fixture_path = tmp_path / "fixture.jsonl"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "asset_id": raw_template["template_id"],
+                "decision": "edited",
+                "based_on_hash": sha256_json(raw_template),
+                "reviewer": "fixture-reviewer",
+                "reason": "create quality finding",
+                "edits": {"claim_strength_guidance": " ".join([repeated] * 3)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    review.apply(run_id, fixture_path)
+    audit = AcceptedCorpusQualityAuditor(review).audit(run_id)
+    packet = AcceptedCorpusQualityReviewRenderer(review).render(
+        run_id,
+        quality_report=audit,
+        reviewer="lengmo",
+        output_dir=tmp_path / "packet",
+    )
+    null_path = tmp_path / "null.jsonl"
+    null_path.write_text(
+        json.dumps(packet["items"][0]["decision_draft"]) + "\n", encoding="utf-8"
+    )
+    with pytest.raises(ReviewValidationError, match=r"empty identity|invalid decision"):
+        review.apply_quality_review(
+            run_id,
+            packet_path=Path(packet["packet_path"]),
+            decisions_path=null_path,
+            dry_run=True,
+        )
+    empty_path = tmp_path / "empty.jsonl"
+    empty_path.write_text("", encoding="utf-8")
+    with pytest.raises(ReviewValidationError, match="cover every packet item"):
+        review.apply_quality_review(
+            run_id,
+            packet_path=Path(packet["packet_path"]),
+            decisions_path=empty_path,
+            dry_run=True,
         )

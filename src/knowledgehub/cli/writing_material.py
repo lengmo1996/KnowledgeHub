@@ -81,6 +81,12 @@ def add_writing_material_parser(subparsers: Any) -> None:
         action="store_true",
         help="Write accepted-partial/ with explicit pending counts instead of requiring full review",
     )
+    apply_quality = review_commands.add_parser("apply-quality")
+    apply_quality.add_argument("--run-id", required=True)
+    apply_quality.add_argument("--packet", type=Path, required=True)
+    apply_quality.add_argument("--decisions", type=Path, required=True)
+    apply_quality.add_argument("--dry-run", action="store_true")
+    apply_quality.add_argument("--yes", action="store_true")
 
     validate = commands.add_parser("validate")
     validate.add_argument("--run-id", required=True)
@@ -253,7 +259,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                     lock_keys=(f"review:writing-materials:{args.run_id}",),
                     output_manifest=lambda value: str(value["review_report"]),
                 )
-            else:
+            elif args.writing_material_review_command == "apply":
 
                 def operation() -> dict[str, Any]:
                     return review.apply(
@@ -280,6 +286,42 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                         value["accepted_snapshot"]["path"] + "/manifest.json"
                     ),
                 )
+            else:
+
+                def operation() -> dict[str, Any]:
+                    return review.apply_quality_review(
+                        args.run_id,
+                        packet_path=args.packet,
+                        decisions_path=args.decisions,
+                        dry_run=args.dry_run,
+                        confirmed=args.yes,
+                    )
+
+                if args.dry_run:
+                    result = operation()
+                else:
+                    result = _executor().execute(
+                        "writing_material_quality_review",
+                        operation,
+                        knowledge_base="writing",
+                        version=args.run_id,
+                        inputs={
+                            "run_id": args.run_id,
+                            "operation": "apply-quality",
+                            "packet": str(args.packet.resolve()),
+                            "packet_sha256": sha256_text(args.packet.read_text(encoding="utf-8")),
+                            "decisions": str(args.decisions.resolve()),
+                            "decisions_sha256": sha256_text(
+                                args.decisions.read_text(encoding="utf-8")
+                            ),
+                            "confirmed": args.yes,
+                        },
+                        input_manifest=str(args.decisions.resolve()),
+                        lock_keys=(f"review:writing-materials:{args.run_id}",),
+                        output_manifest=lambda value: str(
+                            value["accepted_snapshot"]["path"] + "/manifest.json"
+                        ),
+                    )
             _emit(result)
             return 0
         if args.writing_material_command == "validate":
@@ -409,7 +451,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                     "candidate_collection": args.candidate_collection,
                     "accepted_only": True,
                 },
-                input_manifest=str(review.run_dir(args.run_id) / "accepted" / "manifest.json"),
+                input_manifest=str(review.accepted_dir(args.run_id) / "manifest.json"),
                 lock_keys=(f"index:writing:{args.candidate_collection}",),
                 output_manifest=lambda value: str(value["manifest_path"]),
             )
@@ -532,13 +574,9 @@ def _run_release_command(
                     "run_id": args.run_id,
                     "active_collection": active_physical,
                     "candidate_collection": args.candidate_collection,
-                    "accepted_manifest": str(
-                        review.run_dir(args.run_id) / "accepted" / "manifest.json"
-                    ),
+                    "accepted_manifest": str(review.accepted_dir(args.run_id) / "manifest.json"),
                 },
-                input_manifest=str(
-                    review.run_dir(args.run_id) / "accepted" / "manifest.json"
-                ),
+                input_manifest=str(review.accepted_dir(args.run_id) / "manifest.json"),
                 lock_keys=(f"release:writing:{args.candidate_collection}",),
                 output_manifest=lambda value: str(value["manifest_path"]),
             )

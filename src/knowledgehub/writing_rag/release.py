@@ -140,7 +140,7 @@ class WritingMaterialReleaseService:
         validation = self.review.validate(run_id, verify_source=True)
         if validation.get("status") != "success" or not validation.get("index_eligible"):
             raise ValueError("release requires a complete, source-verified accepted snapshot")
-        accepted_manifest = self.review.run_dir(run_id) / "accepted" / "manifest.json"
+        accepted_manifest = self.review.accepted_dir(run_id) / "manifest.json"
         accepted_hash = sha256_text(accepted_manifest.read_text(encoding="utf-8"))
         accepted = json.loads(accepted_manifest.read_text(encoding="utf-8"))
         active = dict(self.backend.inspect(active_collection))

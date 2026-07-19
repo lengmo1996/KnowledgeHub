@@ -445,3 +445,15 @@ Zotero Web API metadata + Nutstore WebDAV attachment mirror
 第一次v1包发现确定性清理会保留位于字段末尾的已见句子截断前缀；修复规则后使用新目录生成v2，v1未覆盖或删除。全仓验证：pytest 542 passed、Ruff passed、mypy 129 source files passed。
 
 新的实现约束：当前review events为append-only，但complete projection固定写入`accepted/`，后续event materialization会覆盖该目录。二次审核导入前必须先实现versioned accepted projection；否则不能满足“不覆盖历史人工审核结果”。因此本阶段只生成不可导入草稿，生产alias仍为green/1107且未变化。
+
+## 19. Phase 8C 版本化 accepted 与质量决定导入复审（2026-07-19）
+
+- **IMPLEMENTED + VERIFIED**：首个`accepted/`保持兼容和只读历史；后续审核projection进入`accepted-revisions/rev-<fingerprint>/`，不会覆盖旧snapshot。
+- **IMPLEMENTED + VERIFIED**：`accepted-current.json`为0600、fingerprinted pointer；current revision由append-only review events与projection hash确定，validate会校验存在的pointer但不把它作为唯一恢复依据。
+- **IMPLEMENTED + VERIFIED**：candidate/release/pilot/CLI消费者统一通过`WritingMaterialReviewService.accepted_dir()`读取当前complete snapshot。
+- **IMPLEMENTED + VERIFIED**：`review apply-quality`绑定`writing-material-quality-review-packet-v1`、current accepted manifest SHA、reviewer和raw asset hash；要求所有flagged items一一具有显式合法决定。
+- **SAFE BY CONSTRUCTION**：dry-run零写入；真实导入必须`--yes`；旧人工edit在二次keep/edit中显式carry forward；evidence不属于质量packet且不能被编辑；导入后旧packet自动stale。
+
+fixture测试覆盖legacy与两个revision均不被覆盖、current pointer权限、null/缺项/stale拒绝、source revalidation和不创建index。定向writing-material回归121 passed、全仓pytest 544 passed、Ruff lint passed、mypy 129 source files passed、`git diff --check` passed。新代码只读验证生产run `20260719T064746Z-f99463512f16`仍为source verified、errors=[]、index eligible，证明无pointer的历史accepted-v2无需迁移。
+
+本阶段没有对36项真实packet执行导入，没有调用LLM，没有扩大30篇selection，没有修改Zotero、Qdrant collection/alias、生产索引、现有run/accepted、cache或manifest。生产alias仍指向既有quality-v2 release。审计中Phase 8B所述“fixed accepted会覆盖”的实现缺口已经关闭，但真实内容质量决定仍为**BLOCKED_ON_REVIEWER_DECISIONS**，不得标记为完成。

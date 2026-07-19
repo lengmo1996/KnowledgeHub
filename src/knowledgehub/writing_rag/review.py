@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -28,6 +29,8 @@ from knowledgehub.writing_rag.provenance import ProvenanceDocumentReader, Proven
 REVIEW_SCHEMA_VERSION = "writing-material-review-v1"
 REVIEW_STATUS_SCHEMA_VERSION = "writing-material-review-status-v1"
 ACCEPTED_SCHEMA_VERSION = "writing-material-accepted-v2"
+ACCEPTED_POINTER_SCHEMA_VERSION = "writing-material-accepted-pointer-v1"
+QUALITY_REVIEW_PACKET_SCHEMA_VERSION = "writing-material-quality-review-packet-v1"
 INDEX_PROCESSOR_VERSION = "writing-material-index-v4"
 CANDIDATE_SCHEMA_VERSION = "writing-material-candidate-v1"
 _INDEX_CHUNK_NAMESPACE = uuid.UUID("f67b77bb-f6fc-56e6-9c37-620f3223bbb1")
@@ -103,6 +106,27 @@ class WritingMaterialReviewService:
             raise ReviewValidationError(f"writing-material run is missing: {run_id}")
         return path
 
+    def accepted_dir(self, run_id: str) -> Path:
+        """Resolve the immutable complete snapshot for the latest review events."""
+
+        run_dir = self.run_dir(run_id)
+        records = self._records(run_dir)
+        targets = self._targets(records)
+        events = _read_jsonl(run_dir / "review-events.jsonl", required=False)
+        self._assert_events(events, targets)
+        projection = self._review_projection(records, events, targets)
+        if _review_status_counts(projection)["pending"]:
+            raise ReviewValidationError("complete accepted snapshot has pending review targets")
+        selected = self._resolve_snapshot_dir(
+            run_dir,
+            events=events,
+            projection=projection,
+            completeness="complete",
+        )
+        if selected is None:
+            raise ReviewValidationError("complete accepted snapshot is missing or stale")
+        return selected
+
     def render(self, run_id: str) -> dict[str, Any]:
         run_dir = self.run_dir(run_id)
         self._completed_manifest(run_dir)
@@ -166,9 +190,22 @@ class WritingMaterialReviewService:
             raise ReviewValidationError(
                 f"review is incomplete ({pending} pending); explicitly allow a partial snapshot"
             )
-        if new_events:
+        if new_events and self._has_snapshot_history(run_dir):
+            snapshot = self._materialize_events(
+                run_id,
+                records=records,
+                events=combined,
+                allow_partial=allow_partial_snapshot,
+                activate=False,
+            )
             atomic_write_jsonl(run_dir / "review-events.jsonl", combined, mode=0o600)
-        snapshot = self.materialize(run_id, allow_partial=allow_partial_snapshot)
+            projection = self._review_projection(records, combined, targets)
+            atomic_write_jsonl(run_dir / "review-status.jsonl", projection, mode=0o600)
+            self._activate_snapshot(run_dir, Path(str(snapshot["path"])))
+        else:
+            if new_events:
+                atomic_write_jsonl(run_dir / "review-events.jsonl", combined, mode=0o600)
+            snapshot = self.materialize(run_id, allow_partial=allow_partial_snapshot)
         return {
             "status": "success",
             "run_id": run_id,
@@ -178,12 +215,154 @@ class WritingMaterialReviewService:
             "accepted_snapshot": snapshot,
         }
 
+    def apply_quality_review(
+        self,
+        run_id: str,
+        *,
+        packet_path: Path,
+        decisions_path: Path,
+        dry_run: bool = False,
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Validate a quality packet and import one explicit decision per flagged asset."""
+
+        validation = self.validate(run_id, verify_source=True)
+        if validation.get("status") != "success" or not validation.get("index_eligible"):
+            raise ReviewValidationError(
+                "quality review import requires a source-verified complete accepted snapshot"
+            )
+        accepted_dir = self.accepted_dir(run_id)
+        accepted_manifest_path = accepted_dir / "manifest.json"
+        accepted_manifest_sha256 = sha256_text(accepted_manifest_path.read_text(encoding="utf-8"))
+        packet = self._validate_quality_packet(
+            run_id,
+            packet_path=packet_path,
+            accepted_manifest_sha256=accepted_manifest_sha256,
+        )
+        records = self._records(self.run_dir(run_id))
+        targets = self._targets(records)
+        accepted_assets = self._accepted_asset_map(accepted_dir)
+        raw_decisions = _read_jsonl(decisions_path)
+        packet_items = {
+            str(item["asset_id"]): item for item in packet["items"] if isinstance(item, Mapping)
+        }
+        if len(raw_decisions) != len(packet_items):
+            raise ReviewValidationError(
+                "quality review decisions must cover every packet item exactly once"
+            )
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        reviewer = str(packet["reviewer"])
+        for line_number, value in enumerate(raw_decisions, start=1):
+            asset_id = str(value.get("asset_id") or "")
+            if asset_id in seen:
+                raise ReviewValidationError(
+                    f"quality review decision line {line_number} duplicates an asset"
+                )
+            seen.add(asset_id)
+            item = packet_items.get(asset_id)
+            if item is None:
+                raise ReviewValidationError(
+                    f"quality review decision line {line_number} is outside the packet"
+                )
+            if value.get("reviewer") != reviewer:
+                raise ReviewValidationError(
+                    f"quality review decision line {line_number} reviewer differs from packet"
+                )
+            if value.get("based_on_hash") != item.get("based_on_hash"):
+                raise ReviewValidationError(
+                    f"quality review decision line {line_number} differs from packet target"
+                )
+            self._validate_decision(value, targets, line_number)
+            normalized_value = self._normalize_quality_decision(
+                value,
+                accepted=accepted_assets[asset_id],
+                target=targets[asset_id],
+            )
+            self._validate_decision(normalized_value, targets, line_number)
+            normalized.append(normalized_value)
+        if seen != set(packet_items):
+            raise ReviewValidationError(
+                "quality review decisions must cover every packet item exactly once"
+            )
+
+        decision_counts = dict(
+            sorted(Counter(str(value["decision"]) for value in normalized).items())
+        )
+        base_result: dict[str, Any] = {
+            "schema_name": "writing_material_quality_review_import",
+            "schema_version": "writing-material-quality-review-import-v1",
+            "status": "planned" if dry_run else "success",
+            "run_id": run_id,
+            "packet_path": str(packet_path.resolve()),
+            "packet_fingerprint": packet["artifact_fingerprint"],
+            "decisions_path": str(decisions_path.resolve()),
+            "decisions_sha256": sha256_text(decisions_path.read_text(encoding="utf-8")),
+            "accepted_manifest_sha256": accepted_manifest_sha256,
+            "decision_counts": decision_counts,
+            "decision_count": len(normalized),
+            "source_verified": True,
+            "review_events_modified": False,
+            "accepted_snapshot_modified": False,
+            "index_modified": False,
+            "llm_called": False,
+            "writes_performed": False,
+        }
+        if dry_run:
+            base_result["artifact_fingerprint"] = sha256_json(base_result)
+            return base_result
+        if not confirmed:
+            raise ReviewValidationError(
+                "quality review import requires explicit confirmation (--yes)"
+            )
+
+        normalized_path = self.run_dir(run_id) / (
+            f".quality-review-import-{uuid.uuid4().hex}.jsonl"
+        )
+        try:
+            atomic_write_jsonl(normalized_path, normalized, mode=0o600)
+            applied = self.apply(run_id, normalized_path)
+        finally:
+            normalized_path.unlink(missing_ok=True)
+        after = self.validate(run_id, verify_source=True)
+        base_result.update(
+            {
+                "review_events_modified": bool(applied["events_appended"]),
+                "accepted_snapshot_modified": not bool(applied["accepted_snapshot"].get("reused")),
+                "writes_performed": True,
+                "accepted_snapshot": applied["accepted_snapshot"],
+                "review_counts": after["review_counts"],
+                "imported": applied["events_appended"],
+                "idempotent": not bool(applied["events_appended"]),
+            }
+        )
+        base_result["artifact_fingerprint"] = sha256_json(base_result)
+        return base_result
+
     def materialize(self, run_id: str, *, allow_partial: bool = False) -> dict[str, Any]:
         run_dir = self.run_dir(run_id)
         self._completed_manifest(run_dir)
         records = self._records(run_dir)
-        targets = self._targets(records)
         events = _read_jsonl(run_dir / "review-events.jsonl", required=False)
+        return self._materialize_events(
+            run_id,
+            records=records,
+            events=events,
+            allow_partial=allow_partial,
+            activate=True,
+        )
+
+    def _materialize_events(
+        self,
+        run_id: str,
+        *,
+        records: Mapping[str, Sequence[Mapping[str, Any]]],
+        events: Sequence[Mapping[str, Any]],
+        allow_partial: bool,
+        activate: bool,
+    ) -> dict[str, Any]:
+        run_dir = self.run_dir(run_id)
+        targets = self._targets(records)
         self._assert_events(events, targets)
         projection = self._review_projection(records, events, targets)
         review_counts = _review_status_counts(projection)
@@ -194,8 +373,37 @@ class WritingMaterialReviewService:
             )
         completeness = "partial" if pending else "complete"
         accepted = self._accepted_records(records, events, targets, projection=projection)
-        accepted_dir = run_dir / ("accepted-partial" if pending else "accepted")
-        accepted_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        current = self._resolve_snapshot_dir(
+            run_dir,
+            events=events,
+            projection=projection,
+            completeness=completeness,
+        )
+        if current is not None:
+            manifest = _read_json(current / "manifest.json")
+            if activate:
+                atomic_write_jsonl(run_dir / "review-status.jsonl", projection, mode=0o600)
+                self._activate_snapshot(run_dir, current)
+            return manifest | {
+                "path": str(current),
+                "index_eligible": completeness == "complete",
+                "reused": True,
+            }
+
+        legacy_name = "accepted-partial" if pending else "accepted"
+        legacy_dir = run_dir / legacy_name
+        revision_id = self._snapshot_revision_id(events, projection, completeness)
+        if not legacy_dir.exists():
+            accepted_dir = legacy_dir
+            revision_kind = "legacy"
+        else:
+            revision_root = run_dir / f"{legacy_name}-revisions"
+            revision_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            accepted_dir = revision_root / revision_id
+            revision_kind = "versioned"
+        if accepted_dir.exists():
+            raise ReviewValidationError("accepted snapshot revision collision")
+        accepted_dir.mkdir(parents=True, mode=0o700)
         for asset_type, filename in _FILES.items():
             atomic_write_jsonl(accepted_dir / filename, accepted[asset_type], mode=0o600)
         manifest = {
@@ -215,10 +423,249 @@ class WritingMaterialReviewService:
             ),
             "counts": {key: len(values) for key, values in accepted.items()},
             "materialized_at": _now(),
+            "revision_id": revision_id,
+            "revision_kind": revision_kind,
+            "immutable_snapshot": True,
         }
         atomic_write_json(accepted_dir / "manifest.json", manifest, mode=0o600)
-        atomic_write_jsonl(run_dir / "review-status.jsonl", projection, mode=0o600)
-        return manifest | {"path": str(accepted_dir), "index_eligible": completeness == "complete"}
+        atomic_write_jsonl(accepted_dir / "review-status.jsonl", projection, mode=0o600)
+        if activate:
+            atomic_write_jsonl(run_dir / "review-status.jsonl", projection, mode=0o600)
+            self._activate_snapshot(run_dir, accepted_dir)
+        return manifest | {
+            "path": str(accepted_dir),
+            "index_eligible": completeness == "complete",
+            "reused": False,
+        }
+
+    @staticmethod
+    def _snapshot_revision_id(
+        events: Sequence[Mapping[str, Any]],
+        projection: Sequence[Mapping[str, Any]],
+        completeness: str,
+    ) -> str:
+        fingerprint = sha256_json(
+            {
+                "review_events_hash": sha256_json(events),
+                "review_projection_hash": sha256_json(projection),
+                "review_completeness": completeness,
+            }
+        )
+        return f"rev-{fingerprint[:24]}"
+
+    @staticmethod
+    def _has_snapshot_history(run_dir: Path) -> bool:
+        return any(
+            path.exists()
+            for path in (
+                run_dir / "accepted",
+                run_dir / "accepted-partial",
+                run_dir / "accepted-revisions",
+                run_dir / "accepted-partial-revisions",
+            )
+        )
+
+    def _resolve_snapshot_dir(
+        self,
+        run_dir: Path,
+        *,
+        events: Sequence[Mapping[str, Any]],
+        projection: Sequence[Mapping[str, Any]],
+        completeness: str,
+    ) -> Path | None:
+        legacy_name = "accepted" if completeness == "complete" else "accepted-partial"
+        revision_id = self._snapshot_revision_id(events, projection, completeness)
+        expected_events_hash = sha256_json(events)
+        expected_projection_hash = sha256_json(projection)
+        candidates = (
+            run_dir / legacy_name,
+            run_dir / f"{legacy_name}-revisions" / revision_id,
+        )
+        for candidate in candidates:
+            manifest_path = candidate / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                manifest = _read_json(manifest_path)
+            except (ReviewValidationError, json.JSONDecodeError, OSError):
+                continue
+            if (
+                manifest.get("schema_version") == ACCEPTED_SCHEMA_VERSION
+                and manifest.get("run_id") == run_dir.name
+                and manifest.get("review_completeness") == completeness
+                and manifest.get("review_events_hash") == expected_events_hash
+                and manifest.get("review_projection_hash") == expected_projection_hash
+            ):
+                return candidate
+        return None
+
+    def _activate_snapshot(self, run_dir: Path, snapshot_dir: Path) -> None:
+        resolved_run = run_dir.resolve()
+        resolved_snapshot = snapshot_dir.resolve()
+        if not resolved_snapshot.is_relative_to(resolved_run):
+            raise ReviewValidationError("accepted snapshot escapes its run directory")
+        manifest_path = snapshot_dir / "manifest.json"
+        manifest = _read_json(manifest_path)
+        completeness = str(manifest.get("review_completeness") or "")
+        if completeness not in {"complete", "partial"}:
+            raise ReviewValidationError("accepted snapshot completeness is invalid")
+        pointer_name = (
+            "accepted-current.json"
+            if completeness == "complete"
+            else "accepted-partial-current.json"
+        )
+        pointer: dict[str, Any] = {
+            "schema_version": ACCEPTED_POINTER_SCHEMA_VERSION,
+            "run_id": run_dir.name,
+            "review_completeness": completeness,
+            "revision_id": manifest.get("revision_id", "legacy"),
+            "snapshot_path": str(resolved_snapshot.relative_to(resolved_run)),
+            "manifest_sha256": sha256_text(manifest_path.read_text(encoding="utf-8")),
+            "review_events_hash": manifest.get("review_events_hash"),
+            "review_projection_hash": manifest.get("review_projection_hash"),
+        }
+        pointer["artifact_fingerprint"] = sha256_json(pointer)
+        atomic_write_json(run_dir / pointer_name, pointer, mode=0o600)
+
+    def _accepted_pointer_errors(
+        self,
+        run_dir: Path,
+        *,
+        accepted_dir: Path,
+        accepted_manifest: Mapping[str, Any],
+    ) -> list[str]:
+        completeness = str(accepted_manifest.get("review_completeness") or "")
+        pointer_name = (
+            "accepted-current.json"
+            if completeness == "complete"
+            else "accepted-partial-current.json"
+        )
+        pointer_path = run_dir / pointer_name
+        if not pointer_path.exists():
+            return []
+        try:
+            pointer = _read_json(pointer_path)
+            fingerprinted = dict(pointer)
+            fingerprint = fingerprinted.pop("artifact_fingerprint", None)
+            expected_path = str(accepted_dir.resolve().relative_to(run_dir.resolve()))
+            manifest_path = accepted_dir / "manifest.json"
+            valid = bool(
+                fingerprint == sha256_json(fingerprinted)
+                and pointer.get("schema_version") == ACCEPTED_POINTER_SCHEMA_VERSION
+                and pointer.get("run_id") == run_dir.name
+                and pointer.get("review_completeness") == completeness
+                and pointer.get("snapshot_path") == expected_path
+                and pointer.get("manifest_sha256")
+                == sha256_text(manifest_path.read_text(encoding="utf-8"))
+                and pointer.get("review_events_hash") == accepted_manifest.get("review_events_hash")
+                and pointer.get("review_projection_hash")
+                == accepted_manifest.get("review_projection_hash")
+            )
+            return [] if valid else ["accepted snapshot current pointer is invalid or stale"]
+        except (ReviewValidationError, json.JSONDecodeError, OSError, ValueError):
+            return ["accepted snapshot current pointer is invalid or stale"]
+
+    @staticmethod
+    def _accepted_asset_map(accepted_dir: Path) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for asset_type in ("strategy", "template", "phrase"):
+            field = _ID_FIELDS[asset_type]
+            for value in _read_jsonl(accepted_dir / _FILES[asset_type]):
+                result[str(value[field])] = value
+        return result
+
+    def _validate_quality_packet(
+        self,
+        run_id: str,
+        *,
+        packet_path: Path,
+        accepted_manifest_sha256: str,
+    ) -> dict[str, Any]:
+        packet = _read_json(packet_path)
+        fingerprinted = dict(packet)
+        fingerprint = fingerprinted.pop("artifact_fingerprint", None)
+        items = packet.get("items")
+        counts = packet.get("counts")
+        if (
+            fingerprint != sha256_json(fingerprinted)
+            or packet.get("schema_name") != "writing_material_quality_review_packet"
+            or packet.get("schema_version") != QUALITY_REVIEW_PACKET_SCHEMA_VERSION
+            or packet.get("status") != "success"
+            or packet.get("run_id") != run_id
+            or packet.get("accepted_manifest_sha256") != accepted_manifest_sha256
+            or not isinstance(packet.get("reviewer"), str)
+            or not str(packet["reviewer"]).strip()
+            or not isinstance(items, list)
+            or not items
+            or not isinstance(counts, Mapping)
+            or counts.get("flagged_assets") != len(items)
+            or packet.get("decision_import_ready") is not False
+            or packet.get("requires_explicit_reviewer_decision") is not True
+            or packet.get("evidence_text_included") is not False
+            or packet.get("provenance_excerpt_included") is not False
+            or packet.get("review_decisions_modified") is not False
+            or packet.get("accepted_snapshot_modified") is not False
+            or packet.get("index_modified") is not False
+            or packet.get("llm_called") is not False
+        ):
+            raise ReviewValidationError("quality review packet is invalid or stale")
+        records = self._records(self.run_dir(run_id))
+        targets = self._targets(records)
+        accepted_assets = self._accepted_asset_map(self.accepted_dir(run_id))
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, Mapping):
+                raise ReviewValidationError("quality review packet item is invalid")
+            asset_id = str(item.get("asset_id") or "")
+            target = targets.get(asset_id)
+            if (
+                not asset_id
+                or asset_id in seen
+                or target is None
+                or target[0] == "evidence"
+                or asset_id not in accepted_assets
+                or item.get("asset_type") != target[0]
+                or item.get("based_on_hash") != sha256_json(target[1])
+            ):
+                raise ReviewValidationError("quality review packet item is invalid or stale")
+            draft = item.get("decision_draft")
+            if (
+                not isinstance(draft, Mapping)
+                or draft.get("asset_id") != asset_id
+                or draft.get("based_on_hash") != item.get("based_on_hash")
+                or draft.get("reviewer") != packet.get("reviewer")
+                or draft.get("decision") is not None
+                or draft.get("reason") is not None
+            ):
+                raise ReviewValidationError("quality review packet draft is not pristine")
+            seen.add(asset_id)
+        return packet
+
+    @staticmethod
+    def _normalize_quality_decision(
+        value: Mapping[str, Any],
+        *,
+        accepted: Mapping[str, Any],
+        target: tuple[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        asset_type, raw = target
+        decision = str(value["decision"])
+        if decision == "rejected":
+            return dict(value)
+        carried = {
+            field: accepted[field]
+            for field in _EDITABLE[asset_type]
+            if field in accepted and accepted.get(field) != raw.get(field)
+        }
+        requested = value.get("edits")
+        if isinstance(requested, Mapping):
+            carried.update(dict(requested))
+        normalized = dict(value)
+        normalized["edits"] = carried
+        normalized["decision"] = "edited" if carried else "accepted"
+        if normalized["decision"] == "accepted":
+            normalized.pop("edits", None)
+        return normalized
 
     def validate(self, run_id: str, *, verify_source: bool = True) -> dict[str, Any]:
         run_dir = self.run_dir(run_id)
@@ -314,15 +761,18 @@ class WritingMaterialReviewService:
             except (ReviewValidationError, json.JSONDecodeError, OSError) as exc:
                 errors.append(f"review status projection is invalid: {exc}")
         complete_snapshot = False
-        snapshot_specs = (
-            (("accepted", "complete"),)
-            if (run_dir / "accepted").exists()
-            else (("accepted-partial", "partial"),)
+        expected_completeness = "partial" if review_counts["pending"] else "complete"
+        accepted_dir = self._resolve_snapshot_dir(
+            run_dir,
+            events=events,
+            projection=projection,
+            completeness=expected_completeness,
         )
-        for directory_name, expected_completeness in snapshot_specs:
-            accepted_dir = run_dir / directory_name
-            if not accepted_dir.exists():
-                continue
+        if accepted_dir is None:
+            if self._has_snapshot_history(run_dir):
+                errors.append("current accepted snapshot is missing or stale")
+        else:
+            directory_name = accepted_dir.name
             expected_accepted = self._accepted_records(
                 records, events, targets, projection=projection
             )
@@ -360,6 +810,13 @@ class WritingMaterialReviewService:
                     errors.append("accepted snapshot target count is invalid")
                 if expected_completeness == "complete":
                     complete_snapshot = True
+                errors.extend(
+                    self._accepted_pointer_errors(
+                        run_dir,
+                        accepted_dir=accepted_dir,
+                        accepted_manifest=accepted_manifest,
+                    )
+                )
             except (ReviewValidationError, json.JSONDecodeError, OSError) as exc:
                 errors.append(f"accepted snapshot is invalid: {exc}")
         extraction_status = str(manifest["status"])
@@ -794,8 +1251,7 @@ class WritingMaterialCandidateIndexer:
             raise ReviewValidationError(
                 "only a complete successful extraction run may be candidate indexed"
             )
-        run_dir = self.review.run_dir(run_id)
-        accepted_dir = run_dir / "accepted"
+        accepted_dir = self.review.accepted_dir(run_id)
         if not (accepted_dir / "manifest.json").is_file():
             raise ReviewValidationError("complete accepted snapshot is missing")
         accepted_manifest = _read_json(accepted_dir / "manifest.json")

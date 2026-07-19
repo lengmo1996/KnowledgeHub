@@ -25,6 +25,7 @@ from knowledgehub.writing_rag.extract import (
 from knowledgehub.writing_rag.review import (
     ACCEPTED_SCHEMA_VERSION,
     CANDIDATE_SCHEMA_VERSION,
+    QUALITY_REVIEW_PACKET_SCHEMA_VERSION,
     WritingMaterialReviewService,
 )
 
@@ -34,7 +35,6 @@ RETRIEVAL_CASE_SCHEMA_VERSION = "writing-material-retrieval-case-v1"
 RETRIEVAL_REPORT_SCHEMA_VERSION = "writing-material-retrieval-evaluation-v1"
 PROVIDER_PREFLIGHT_SCHEMA_VERSION = "writing-material-provider-preflight-v2"
 QUALITY_AUDIT_SCHEMA_VERSION = "writing-material-quality-audit-v1"
-QUALITY_REVIEW_PACKET_SCHEMA_VERSION = "writing-material-quality-review-packet-v1"
 
 _QUALITY_TEXT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "strategy": (
@@ -458,7 +458,7 @@ class ControlledPilotEvaluator:
         document_failure_rate = _rate(failed_documents, selected)
         exact_rejection_rate = _rate(exact_rejected, exact_rejected + evidence_count)
         provider_failure_rate = _rate(provider_failures, selected)
-        accepted_manifest_path = run_dir / "accepted" / "manifest.json"
+        accepted_manifest_path = self.review.accepted_dir(run_id) / "manifest.json"
         accepted = (
             _read_object(accepted_manifest_path) if accepted_manifest_path.is_file() else None
         )
@@ -582,8 +582,7 @@ class CandidateRetrievalEvaluator:
         validation = self.review.validate(run_id, verify_source=True)
         if validation.get("status") != "success" or not validation.get("index_eligible"):
             raise ValueError("retrieval evaluation requires a source-verified complete review")
-        run_dir = self.review.run_dir(run_id)
-        accepted_dir = run_dir / "accepted"
+        accepted_dir = self.review.accepted_dir(run_id)
         accepted_manifest = _read_object(accepted_dir / "manifest.json")
         counts = accepted_manifest.get("counts")
         if not isinstance(counts, Mapping):
@@ -715,7 +714,7 @@ class AcceptedCorpusQualityAuditor:
         validation = self.review.validate(run_id, verify_source=True)
         if validation.get("status") != "success" or not validation.get("index_eligible"):
             raise ValueError("quality audit requires a source-verified complete review")
-        accepted_dir = self.review.run_dir(run_id) / "accepted"
+        accepted_dir = self.review.accepted_dir(run_id)
         manifest_path = accepted_dir / "manifest.json"
         manifest = _read_object(manifest_path)
         if (
@@ -828,7 +827,7 @@ class AcceptedCorpusQualityReviewRenderer:
         if validation.get("status") != "success" or not validation.get("index_eligible"):
             raise ValueError("quality review packet requires a source-verified complete review")
         run_dir = self.review.run_dir(run_id)
-        accepted_dir = run_dir / "accepted"
+        accepted_dir = self.review.accepted_dir(run_id)
         manifest_path = accepted_dir / "manifest.json"
         manifest_hash = sha256_text(manifest_path.read_text(encoding="utf-8"))
         policy = _validate_quality_audit_report(

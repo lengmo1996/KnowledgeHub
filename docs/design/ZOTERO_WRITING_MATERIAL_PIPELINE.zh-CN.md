@@ -375,9 +375,14 @@ knowledgehub writing-material pilot audit-quality --run-id <run-id> \
 knowledgehub writing-material pilot render-quality-review --run-id <run-id> \
   --audit-report /tmp/writing-material-quality-audit.json --reviewer <reviewer> \
   --output-dir /tmp/writing-material-quality-review
+knowledgehub writing-material review apply-quality --run-id <run-id> \
+  --packet /tmp/writing-material-quality-review/quality-review-packet.json \
+  --decisions /tmp/writing-material-quality-decisions.jsonl --dry-run
 ```
 
 Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖旧 run。非 dry-run OpenAI-compatible extraction 要求配置 approved model 和 base URL 环境变量；`deterministic_fixture` 只允许作为明确标记的测试输出。
+
+二次人工审核采用append-only event与版本化projection：首个历史`accepted/`保留，后续完整snapshot写入`accepted-revisions/rev-<fingerprint>/`，并由0600 `accepted-current.json`记录。读取逻辑根据review events/projection hash解析当前revision并校验pointer，不能通过替换pointer复用旧定位或旧审核状态。质量决定导入必须先`apply-quality --dry-run`，真实导入另需`--yes`；它不修改evidence，也不创建或发布索引。
 
 ## 15. 测试策略与 MVP 步骤
 
