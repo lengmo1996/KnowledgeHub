@@ -880,3 +880,19 @@ Phase 14A结论：未发布、无共享cache依赖的到期run已经具备安全
 实际修改文件：`src/knowledgehub/writing_rag/extract.py`、`src/knowledgehub/writing_rag/retention.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_retention.py`、`tests/writing_material/test_provider_and_dedup.py`、retention runbook、设计文档、本计划与实施审计。
 
 Phase 14B1结论：shared provider cache从不可归属阻断转为可验证、可按run清除的已知依赖。当前run尚未到期，因此没有执行cache purge。未来到期模拟现在只剩两个显式动作：先purge当前run的1281个cache scope，再处理7个candidate/release引用。Phase 14B2将实现alias安全回退、绑定collection清除和本地引用隔离；完整自动到期处置继续保持`PARTIAL`，不提前标完成。
+
+## Phase 14B2：released run alias-safe decommission（2026-07-20）
+
+1. [x] 新增`writing-material-release-retirement-{plan,intent,receipt}-v1`状态机；expired前只返回`not_due`，不扫描Qdrant、写intent或移动任何数据。
+2. [x] 对index-candidates、release-candidates和releases逐清单验证run ID、canonical artifact fingerprint、目录inventory及物理collection所有权；共享collection、非法指纹、symlink、unreadable artifact或owner漂移均fail closed。
+3. [x] 到期时若run collection仍为stable alias active，先验证独立previous collection为green/points/schema完整，再使用既有原子rollback；若run只占previous rollback slot，则不反向切换alias，只进入retire-previous路径。
+4. [x] 只有live alias已经离开run collection后，才删除run独占physical collections；Qdrant adapter验证安全物理名称、delete结果和集合消失，不允许删除stable alias或fallback。
+5. [x] 7类本地引用目录使用同文件系统atomic rename进入0700`release-reference-quarantine/<run-id>/`，逐文件size/SHA-256 inventory保持一致；随后清除promotion state中的旧previous/staged指针，fallback active保持不变。
+6. [x] intent先于alias/index mutation落盘；alias已回退、部分collection已删除、目录已移动或receipt写入中断时均可从同一intent重试。每次重试前重新验证run仍到期、目录inventory、collection inspection和无新增run owner，拒绝stale plan继续删除。
+7. [x] CLI新增`retention plan-release-retirement`和`decommission-release --yes`；两者要求retention-dispose且额外要求release权限，真实处置使用derive、promotion和per-run retention三重TaskStore lock。
+8. [x] 当前真实run只读plan为`not_due`，expires_at=`2031-07-19T06:47:32.819105+00:00`，fingerprint `b0e937cf0b1ab2579f2623fe93184d60faace418202dd0f8c3621029c64a295d`；`writes_performed=false`、`index_modified=false`、`llm_called=false`。
+9. [x] fixture覆盖未到期零Qdrant I/O、健康/不健康fallback、active rollback、inactive previous retirement、alias drift、共享owner、非法fingerprint、双RBAC权限、显式确认、rollback-before-delete、partial delete恢复和重试中新owner漂移拒绝。定向34 passed；最终全仓579 passed、Ruff passed、mypy 132 source files和`git diff --check`通过。
+
+实际修改文件：`src/knowledgehub/writing_rag/release_retention.py`、`src/knowledgehub/writing_rag/release.py`、`src/knowledgehub/governance/snapshots.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_release_retention.py`、`tests/v2/test_governance.py`、retention runbook、设计文档、本计划与实施审计。
+
+Phase 14B2结论：released run的alias、物理collection和7个本地引用已具备到期后可恢复的安全解除路径；当前run未到期，因此没有执行decommission，没有切换alias、删除collection或移动真实工件。完整自动处置仍为`PARTIAL`：Phase 14C需为release-reference quarantine增加grace/purge，并提供单一协调入口按`cache scope purge → release decommission → run quarantine`顺序执行和恢复；完成前不把分散命令宣称为无人值守全自动闭环。

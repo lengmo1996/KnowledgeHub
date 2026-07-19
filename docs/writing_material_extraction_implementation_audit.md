@@ -559,3 +559,15 @@ Phase 13消除了Phase 10所记录的`identity_enforced=false`当前缺口。历
 - **MUTATION BOUNDARY**：真实写入仅为1281个cache文件的scope元数据、versioned intent/receipts和TaskStore审计；没有修改response、调用LLM、删除cache、修改run/review/index/collection/alias。
 
 当前未来到期阻断已从“unscoped cache + 7 references”收敛为“已知cache scope待到期purge + 7 references”。Phase 14B2必须先安全回退active alias（若仍绑定该run），再删除仅绑定该run的physical collections并隔离对应本地candidate/release工件；此步骤尚未实现或执行。
+
+## 29. Phase 14B2 released run 安全退役（2026-07-20）
+
+- **IMPLEMENTED**：新增`WritingMaterialReleaseRetirementService`和fingerprinted plan/intent/receipt；未到期plan不访问Qdrant且零写入，到期执行必须显式`--yes`。
+- **OWNERSHIP VERIFIED**：每个candidate/release manifest必须通过run identity和artifact fingerprint，物理collection必须只由目标run引用；目录以逐文件SHA-256 inventory绑定。共享owner、alias drift、collection/inventory变化和新增owner均阻断。
+- **ALIAS SAFE**：目标run为active时先使用既有原子rollback到健康独立fallback；目标run仅为previous时不再次切换alias。collection删除严格发生在live alias离开目标collection之后。
+- **RECOVERABLE**：intent固定原始7目录/5 collection及inspection。rollback后、部分delete后、atomic move后或receipt前中断均可重试；promotion current中的retired previous/staged引用最后清除。
+- **RBAC + LOCKED**：CLI计划/处置除`writing_material.retention_dispose`外额外要求`writing_material.release`；TaskStore同时锁定derive、writing promotion和目标run retention。
+- **REAL DRY-RUN**：当前run返回`not_due`、expires_at=`2031-07-19T06:47:32.819105+00:00`、fingerprint `b0e937cf...4a295d`，明确index/LLM/write均为false。因为未到期，没有真实alias、collection或目录mutation。
+- **VERIFIED**：退役/retention/release/governance定向34 passed，另有双RBAC权限测试；全仓579 passed、Ruff passed、mypy 132 source files和`git diff --check`通过。
+
+自动到期处置仍为**PARTIAL**而不是完成：released run的引用解除已经实现，但release-reference quarantine尚缺30天grace后的inventory-verified purge，且cache purge、release retirement和run quarantine仍是三个显式命令。Phase 14C应只做这两个协调闭环，不扩量、不调用LLM、不提前执行当前未到期run。

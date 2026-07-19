@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from knowledgehub.core.atomic import atomic_write_json
+from knowledgehub.core.atomic import atomic_write_json, safe_unlink
 from knowledgehub.governance.releases import CandidateReleaseManager
 
 
@@ -150,15 +150,11 @@ class IndexSnapshotManager:
             source_manifest = Path(str(manifest["release_manifest"]))
             release_manager = CandidateReleaseManager(source_manifest.resolve().parents[2])
             source_release = release_manager.verify_validated(source_manifest)
-            if source_release.get("artifact_fingerprint") != manifest.get(
-                "artifact_fingerprint"
-            ):
+            if source_release.get("artifact_fingerprint") != manifest.get("artifact_fingerprint"):
                 raise ValueError("snapshot release fingerprint no longer matches")
             if release_manager.layout(knowledge_base, target_collection).root.exists():
                 raise ValueError("snapshot recovery candidate release already exists")
-        location = (
-            f"file:///qdrant/snapshots/{source_collection}/{manifest['qdrant_snapshot']}"
-        )
+        location = f"file:///qdrant/snapshots/{source_collection}/{manifest['qdrant_snapshot']}"
         result = self.client.recover_snapshot(
             target_collection,
             location=location,
@@ -183,12 +179,12 @@ class IndexSnapshotManager:
                 build_scope={
                     "recovered_from_snapshot": snapshot_id,
                     "source_release": source_release.get("release_id"),
-                    "expected_documents": (
-                        source_release.get("build_scope") or {}
-                    ).get("expected_documents"),
-                    "source_document_fingerprint": (
-                        source_release.get("build_scope") or {}
-                    ).get("source_document_fingerprint"),
+                    "expected_documents": (source_release.get("build_scope") or {}).get(
+                        "expected_documents"
+                    ),
+                    "source_document_fingerprint": (source_release.get("build_scope") or {}).get(
+                        "source_document_fingerprint"
+                    ),
                 },
                 embedding=dict(source_release.get("embedding") or {}),
                 promotion_eligible=True,
@@ -360,9 +356,7 @@ class CollectionPromotionManager:
         )
         return value
 
-    def rollback(
-        self, knowledge_base: str, *, confirmed: bool = False
-    ) -> dict[str, Any]:
+    def rollback(self, knowledge_base: str, *, confirmed: bool = False) -> dict[str, Any]:
         if not confirmed:
             raise ValueError("alias rollback requires explicit confirmation")
         self._ensure_no_pending(knowledge_base)
@@ -387,9 +381,7 @@ class CollectionPromotionManager:
             "previous_rag_data_dir": current.get("rag_data_dir"),
             "candidate_rag_data_dir": current.get("previous_rag_data_dir"),
             "candidate_release_manifest": current.get("previous_release_manifest"),
-            "candidate_artifact_fingerprint": current.get(
-                "previous_artifact_fingerprint"
-            ),
+            "candidate_artifact_fingerprint": current.get("previous_artifact_fingerprint"),
             "status": "prepared",
             "prepared_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -427,6 +419,57 @@ class CollectionPromotionManager:
         )
         return value
 
+    def finalize_retired_previous(
+        self,
+        knowledge_base: str,
+        retired_collection: str,
+        *,
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Forget a decommissioned rollback target after its alias-safe retirement."""
+        if not confirmed:
+            raise ValueError("previous collection retirement requires explicit confirmation")
+        self._ensure_no_pending(knowledge_base)
+        current = self._read(knowledge_base, "current.json")
+        if not current:
+            raise ValueError("no active promotion state is available")
+        alias = self.alias_name(knowledge_base)
+        active = str(current.get("active_collection") or "")
+        previous = current.get("previous_collection")
+        if self._actual_alias(alias) != active:
+            raise RuntimeError("live alias target differs from promotion state")
+        staged = self._read(knowledge_base, "staged.json")
+        if previous is None:
+            if staged and staged.get("candidate_collection") == retired_collection:
+                safe_unlink(
+                    self._path(knowledge_base, "staged.json"),
+                    root=self.root,
+                )
+            return current
+        if previous != retired_collection or active == retired_collection:
+            raise ValueError("retired collection is not the inactive rollback target")
+        if staged and staged.get("candidate_collection") not in {
+            retired_collection,
+            active,
+        }:
+            raise ValueError("an unrelated staged collection prevents retirement")
+        value = {
+            **current,
+            "previous_collection": None,
+            "previous_rag_data_dir": None,
+            "previous_release_manifest": None,
+            "previous_artifact_fingerprint": None,
+            "retired_collection": retired_collection,
+            "retired_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if staged and staged.get("candidate_collection") == retired_collection:
+            safe_unlink(
+                self._path(knowledge_base, "staged.json"),
+                root=self.root,
+            )
+        self._write(knowledge_base, "current.json", value)
+        return value
+
     def recover_pending(self, knowledge_base: str, fallback: str) -> dict[str, Any]:
         transaction = self._read(knowledge_base, "transaction.json")
         if not transaction or transaction.get("status") in {"committed", "aborted"}:
@@ -448,9 +491,7 @@ class CollectionPromotionManager:
                 "rag_data_dir": transaction.get("candidate_rag_data_dir"),
                 "previous_rag_data_dir": transaction.get("previous_rag_data_dir"),
                 "release_manifest": transaction.get("candidate_release_manifest"),
-                "artifact_fingerprint": transaction.get(
-                    "candidate_artifact_fingerprint"
-                ),
+                "artifact_fingerprint": transaction.get("candidate_artifact_fingerprint"),
                 "recovered_at": datetime.now(timezone.utc).isoformat(),
             }
             self._write(knowledge_base, "current.json", value)
@@ -478,15 +519,11 @@ class CollectionPromotionManager:
         operations: list[Any] = []
         if exists:
             operations.append(
-                models.DeleteAliasOperation(
-                    delete_alias=models.DeleteAlias(alias_name=alias)
-                )
+                models.DeleteAliasOperation(delete_alias=models.DeleteAlias(alias_name=alias))
             )
         operations.append(
             models.CreateAliasOperation(
-                create_alias=models.CreateAlias(
-                    collection_name=collection, alias_name=alias
-                )
+                create_alias=models.CreateAlias(collection_name=collection, alias_name=alias)
             )
         )
         if not self.client.update_collection_aliases(operations):

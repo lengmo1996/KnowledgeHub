@@ -159,9 +159,19 @@ def test_candidate_promotion_and_atomic_alias_rollback(tmp_path: Path) -> None:
     assert client.aliases["knowledgehub_code_current"] == "old"
     assert active_release_data_dir(tmp_path, "code", fallback_rag) == fallback_rag
     assert (
-        active_release_normalized_root(tmp_path, "code", fallback_normalized)
-        == fallback_normalized
+        active_release_normalized_root(tmp_path, "code", fallback_normalized) == fallback_normalized
     )
+    with pytest.raises(ValueError, match="explicit confirmation"):
+        manager.finalize_retired_previous("code", "candidate")
+    finalized = manager.finalize_retired_previous(
+        "code",
+        "candidate",
+        confirmed=True,
+    )
+    assert finalized["active_collection"] == "old"
+    assert finalized["previous_collection"] is None
+    assert finalized["retired_collection"] == "candidate"
+    assert not (tmp_path / "code" / "aliases" / "staged.json").exists()
 
 
 def test_candidate_release_validation_binds_local_artifacts_to_qdrant(
@@ -361,9 +371,7 @@ def test_promotion_transaction_recovers_after_alias_switch_interrupt(
     with pytest.raises(KeyboardInterrupt):
         manager.promote("code", "old", confirmed=True)
     assert client.aliases["knowledgehub_code_current"] == "candidate"
-    transaction = json.loads(
-        (tmp_path / "code" / "aliases" / "transaction.json").read_text()
-    )
+    transaction = json.loads((tmp_path / "code" / "aliases" / "transaction.json").read_text())
     assert transaction["status"] == "alias_switched"
     recovered = CollectionPromotionManager(tmp_path, client).recover_pending("code", "old")
     assert recovered["status"] == "committed"

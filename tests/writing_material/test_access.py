@@ -137,7 +137,18 @@ def test_writing_material_cli_maps_commands_to_least_privilege() -> None:
         ),
         (["release", "rollback", "--dry-run"], "writing_material.release"),
         (
-            ["pilot", "render-quality-review", "--run-id", "run-1", "--audit-report", "a.json", "--reviewer", "lengmo", "--output-dir", "out"],
+            [
+                "pilot",
+                "render-quality-review",
+                "--run-id",
+                "run-1",
+                "--audit-report",
+                "a.json",
+                "--reviewer",
+                "lengmo",
+                "--output-dir",
+                "out",
+            ],
             "writing_material.review",
         ),
     )
@@ -161,15 +172,11 @@ def test_writing_material_cli_maps_commands_to_least_privilege() -> None:
     assert access_args.yes is True
 
 
-def test_cli_fails_closed_when_configured_policy_is_missing(
-    tmp_path, monkeypatch, capsys
-) -> None:
+def test_cli_fails_closed_when_configured_policy_is_missing(tmp_path, monkeypatch, capsys) -> None:
     policy = tmp_path / "access" / "missing.json"
     monkeypatch.setattr(
         "knowledgehub.cli.writing_material.HubConfig.load",
-        lambda _path: SimpleNamespace(
-            writing_materials=SimpleNamespace(rbac_policy_path=policy)
-        ),
+        lambda _path: SimpleNamespace(writing_materials=SimpleNamespace(rbac_policy_path=policy)),
     )
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -193,6 +200,40 @@ def test_cli_denies_command_before_business_service_dispatch(tmp_path, monkeypat
     commands = parser.add_subparsers(dest="command", required=True)
     add_writing_material_parser(commands)
     args = parser.parse_args(["writing-material", "release", "rollback", "--dry-run"])
+    args.hub_config = None
+    assert run_writing_material_command(args) == 2
+    output = capsys.readouterr().out
+    assert "AccessDeniedError" in output
+    assert "lacks writing_material.release" in output
+
+
+def test_release_retirement_requires_retention_and_release_permissions(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    control = _control(tmp_path)
+    control.bootstrap(subject="lengmo", roles=["retention_manager"], confirmed=True)
+    monkeypatch.setattr(
+        "knowledgehub.cli.writing_material.HubConfig.load",
+        lambda _path: SimpleNamespace(
+            writing_materials=SimpleNamespace(
+                rbac_policy_path=control.policy_path,
+                data_root=tmp_path / "writing-materials",
+                literature_data_dir=tmp_path / "literature",
+            )
+        ),
+    )
+    parser = argparse.ArgumentParser()
+    commands = parser.add_subparsers(dest="command", required=True)
+    add_writing_material_parser(commands)
+    args = parser.parse_args(
+        [
+            "writing-material",
+            "retention",
+            "plan-release-retirement",
+            "--run-id",
+            "run-1",
+        ]
+    )
     args.hub_config = None
     assert run_writing_material_command(args) == 2
     output = capsys.readouterr().out

@@ -30,6 +30,9 @@ from knowledgehub.writing_rag.pilot import (
     provider_preflight,
 )
 from knowledgehub.writing_rag.release import QdrantReleaseBackend, WritingMaterialReleaseService
+from knowledgehub.writing_rag.release_retention import (
+    WritingMaterialReleaseRetirementService,
+)
 from knowledgehub.writing_rag.retention import WritingMaterialRetentionService
 from knowledgehub.writing_rag.review import (
     WritingMaterialCandidateIndexer,
@@ -45,9 +48,7 @@ def add_writing_material_parser(subparsers: Any) -> None:
     commands = root.add_subparsers(dest="writing_material_command", required=True)
 
     access = commands.add_parser("access")
-    access_commands = access.add_subparsers(
-        dest="writing_material_access_command", required=True
-    )
+    access_commands = access.add_subparsers(dest="writing_material_access_command", required=True)
     bootstrap_access = access_commands.add_parser("bootstrap")
     bootstrap_access.add_argument("--subject", required=True)
     bootstrap_access.add_argument(
@@ -80,6 +81,12 @@ def add_writing_material_parser(subparsers: Any) -> None:
     purge_cache_scope = retention_commands.add_parser("purge-cache-scope")
     purge_cache_scope.add_argument("--run-id", required=True)
     purge_cache_scope.add_argument("--yes", action="store_true")
+    release_retirement_plan = retention_commands.add_parser("plan-release-retirement")
+    release_retirement_plan.add_argument("--run-id", required=True)
+    release_retirement_plan.add_argument("--output", type=Path)
+    decommission_release = retention_commands.add_parser("decommission-release")
+    decommission_release.add_argument("--run-id", required=True)
+    decommission_release.add_argument("--yes", action="store_true")
 
     extract = commands.add_parser("extract")
     extract.add_argument("--selection", type=Path)
@@ -206,9 +213,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
         materials = config.writing_materials
         rbac_policy_path = getattr(materials, "rbac_policy_path", None)
         access = (
-            WritingMaterialAccessControl(rbac_policy_path)
-            if rbac_policy_path is not None
-            else None
+            WritingMaterialAccessControl(rbac_policy_path) if rbac_policy_path is not None else None
         )
         if args.writing_material_command == "access":
             if access is None:
@@ -236,7 +241,41 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
         if args.writing_material_command == "retention":
             retention = WritingMaterialRetentionService(materials.data_root)
             command = args.writing_material_retention_command
-            if command in {"plan", "plan-cache-scope"}:
+            if command in {"plan-release-retirement", "decommission-release"}:
+                if access is not None:
+                    access.require("writing_material.release")
+                retirement = _release_retirement_service(config)
+                try:
+                    if command == "plan-release-retirement":
+                        result = retirement.plan(args.run_id)
+                        if args.output is not None:
+                            atomic_write_json(args.output, result, mode=0o600)
+                    else:
+                        result = _executor().execute(
+                            "writing_material_retention_decommission_release",
+                            lambda: retirement.decommission(args.run_id, confirmed=args.yes),
+                            knowledge_base="writing",
+                            version=args.run_id,
+                            inputs={
+                                "run_id": args.run_id,
+                                "operation": command,
+                                "confirmed": args.yes,
+                            },
+                            lock_keys=(
+                                "derive:writing-materials",
+                                "index:writing:promotion",
+                                f"retention:writing-materials:{args.run_id}",
+                            ),
+                            output_manifest=lambda _value: str(
+                                materials.data_root
+                                / "retention"
+                                / "release-retirement-receipts"
+                                / f"{args.run_id}.json"
+                            ),
+                        )
+                finally:
+                    retirement.close()
+            elif command in {"plan", "plan-cache-scope"}:
                 result = (
                     retention.plan(args.run_id)
                     if command == "plan"
@@ -246,26 +285,34 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                     atomic_write_json(args.output, result, mode=0o600)
             else:
                 if command == "quarantine":
+
                     def operation() -> dict[str, Any]:
                         return retention.quarantine(args.run_id, confirmed=args.yes)
+
                     receipt_group = "receipts"
                 elif command == "purge":
+
                     def operation() -> dict[str, Any]:
                         return retention.purge(args.run_id, confirmed=args.yes)
+
                     receipt_group = "receipts"
                 elif command == "migrate-cache-scope":
+
                     def operation() -> dict[str, Any]:
                         return retention.migrate_legacy_cache_scope(
                             args.run_id,
                             confirmed=args.yes,
                         )
+
                     receipt_group = "cache-scope-receipts"
                 else:
+
                     def operation() -> dict[str, Any]:
                         return retention.purge_cache_scope(
                             args.run_id,
                             confirmed=args.yes,
                         )
+
                     receipt_group = "cache-purge-receipts"
                 result = _executor().execute(
                     f"writing_material_retention_{command}",
@@ -278,19 +325,14 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                         f"retention:writing-materials:{args.run_id}",
                     ),
                     output_manifest=lambda _value: str(
-                        materials.data_root
-                        / "retention"
-                        / receipt_group
-                        / f"{args.run_id}.json"
+                        materials.data_root / "retention" / receipt_group / f"{args.run_id}.json"
                     ),
                 )
             _emit(result)
             return 0 if result.get("status") not in {"blocked", "failed"} else 1
         if args.writing_material_command == "extract":
             selection = _selection_for_extract(args, review)
-            pilot_approval = (
-                _read_object(args.pilot_approval) if args.pilot_approval else None
-            )
+            pilot_approval = _read_object(args.pilot_approval) if args.pilot_approval else None
             service = WritingMaterialExtractionService(materials.runtime_config())
             try:
 
@@ -344,9 +386,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                                 else None
                             ),
                             "pilot_approval_sha256": (
-                                sha256_text(
-                                    args.pilot_approval.read_text(encoding="utf-8")
-                                )
+                                sha256_text(args.pilot_approval.read_text(encoding="utf-8"))
                                 if args.pilot_approval is not None
                                 else None
                             ),
@@ -472,9 +512,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                             "run_id": args.run_id,
                             "operation": "reconcile-quality-receipt",
                             "packet": str(args.packet.resolve()),
-                            "packet_sha256": sha256_text(
-                                args.packet.read_text(encoding="utf-8")
-                            ),
+                            "packet_sha256": sha256_text(args.packet.read_text(encoding="utf-8")),
                             "decisions": str(args.decisions.resolve()),
                             "decisions_sha256": sha256_text(
                                 args.decisions.read_text(encoding="utf-8")
@@ -483,9 +521,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                         },
                         input_manifest=str(args.decisions.resolve()),
                         lock_keys=(f"review:writing-materials:{args.run_id}",),
-                        output_manifest=lambda value: str(
-                            value["quality_review_receipt"]["path"]
-                        ),
+                        output_manifest=lambda value: str(value["quality_review_receipt"]["path"]),
                     )
             _emit(result)
             return 0
@@ -775,6 +811,24 @@ def _run_release_command(
         return service.rollback(confirmed=args.yes)
     finally:
         client.close()
+
+
+def _release_retirement_service(
+    config: HubConfig,
+) -> WritingMaterialReleaseRetirementService:
+    from qdrant_client import QdrantClient
+
+    from knowledgehub.governance.snapshots import CollectionPromotionManager
+
+    rag = config.rag_config("writing")
+    client = QdrantClient(url=rag.qdrant_url)
+    index_root = Path(os.environ.get("KH_INDEX_ROOT", "/data/KnowledgeHub/indexes"))
+    return WritingMaterialReleaseRetirementService(
+        config.writing_materials.data_root,
+        QdrantReleaseBackend(client),
+        CollectionPromotionManager(index_root, client),
+        fallback_collection=config.knowledge_bases["writing"].collection,
+    )
 
 
 def _run_pilot_retrieval_command(

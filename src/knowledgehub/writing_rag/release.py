@@ -28,6 +28,8 @@ class ReleaseBackend(Protocol):
 
     def restore(self, snapshot: Mapping[str, Any], target_collection: str) -> None: ...
 
+    def delete_collection(self, collection: str) -> None: ...
+
 
 class PromotionBackend(Protocol):
     def stage(
@@ -48,7 +50,9 @@ class QdrantReleaseBackend:
         self.client = client
 
     def inspect(self, collection: str) -> Mapping[str, Any]:
-        if hasattr(self.client, "collection_exists") and not self.client.collection_exists(collection):
+        if hasattr(self.client, "collection_exists") and not self.client.collection_exists(
+            collection
+        ):
             return {"exists": False}
         try:
             info = self.client.get_collection(collection)
@@ -119,6 +123,17 @@ class QdrantReleaseBackend:
         )
         if not result:
             raise RuntimeError("Qdrant snapshot recovery failed")
+
+    def delete_collection(self, collection: str) -> None:
+        """Delete one validated physical collection and verify its disappearance."""
+        if not _COLLECTION.fullmatch(collection) or collection == "knowledgehub_writing_current":
+            raise ValueError("release collection has an unsafe name")
+        if not self.inspect(collection).get("exists"):
+            return
+        if not self.client.delete_collection(collection, timeout=60):
+            raise RuntimeError("Qdrant collection deletion failed")
+        if self.inspect(collection).get("exists"):
+            raise RuntimeError("Qdrant collection still exists after deletion")
 
 
 class WritingMaterialReleaseService:
@@ -356,7 +371,9 @@ class WritingMaterialReleaseService:
                 errors.append(f"active release manifest validation failed: {exc}")
 
         if not current.get("previous_release_manifest"):
-            warnings.append("previous collection predates a tracked writing-material release manifest")
+            warnings.append(
+                "previous collection predates a tracked writing-material release manifest"
+            )
         report = {
             "schema_name": "writing_material_rollback_readiness",
             "schema_version": "writing-material-rollback-readiness-v1",
