@@ -670,15 +670,23 @@ Phase 1 已采用以下保守默认并保留决策历史：
 4. [x] 对仅含一个明确 `template/strategy/phrase`（含中文同义词）意图的 query 增加 deterministic `asset_type` filter；含糊 query 不过滤，规则不读取 expected asset ID。
 5. [x] 构建新的 accepted-only 隔离 candidate `knowledgehub_writing_material_candidate_20260719_f99463512f16_quality_v2`：973/973、green、source verified、promotion=false，fingerprint `320d00b14aa94c6aa0844027404ee39bddde621de241e329c3892687535adbe6`。
 6. [x] 使用未修改的原8条 gold cases 重跑 sparse retrieval：两条旧 miss 均变为目标 Top-1，Recall@5=1.0、MRR=1.0、source join=1.0、duplicate=0；报告 fingerprint `799d2909015bbc9439c32934044975a1c9489abc6c37862371101a4b003bc797`。
-7. [x] 全仓 pytest 534 passed、Ruff、mypy 129 source files与`git diff --check`通过；质量改进待本阶段紧接提交。
+7. [x] 全仓 pytest 534 passed、Ruff、mypy 129 source files与`git diff --check`通过；质量改进已提交为 `0d743f7`（`fix: improve writing material sparse retrieval`）。
 
 实际修改文件：`src/knowledgehub/indexing/sparse.py`、`src/knowledgehub/indexing/incremental.py`、`src/knowledgehub/pipeline/models.py`、`src/knowledgehub/retrieval/models.py`、`src/knowledgehub/retrieval/service.py`、`src/knowledgehub/hub/query.py`、`src/knowledgehub/cli/writing_material.py`、`src/knowledgehub/writing_rag/materials.py`、`src/knowledgehub/writing_rag/review.py` 及对应 tests。
 
 ### Phase 7B：clone-and-merge stage/promotion
 
-1. [ ] 只读确认 active physical collection、stable alias、promotion state、134-point 基线与 rollback fallback。
-2. [ ] release build dry-run 验证 `134 + 973 = 1107`，且 candidate 为新的物理 collection。
-3. [ ] 创建 active snapshot，恢复到 release candidate，合并 accepted assets并验证1107 points、dense/sparse schema与source join。
-4. [ ] 使用带 fingerprint 的 `writing-material-release-v1` manifest 执行显式 stage。
-5. [ ] promotion 前复验 active snapshot/fallback 与 candidate manifest，再显式 promote stable alias。
-6. [ ] promotion 后验证 alias、active point count、8-case retrieval/source join；保留 rollback 信息，不删除旧 active、隔离 candidates、snapshot、manifest或缓存。
+1. [x] 只读确认 active physical collection `knowledgehub_writing_qwen3_4b_1024_v1` 为 green/134 points；此前没有 Writing stable alias，旧 physical collection 被保留为 rollback fallback。
+2. [x] release build dry-run 验证 `134 + 973 = 1107`，目标为全新物理 collection `knowledgehub_writing_release_20260719_f99463512f16_quality_v2`，未在 dry-run 中写入或切换 alias。
+3. [x] 为旧 active 创建 snapshot `knowledgehub_writing_qwen3_4b_1024_v1-8688692131812382-2026-07-19-13-09-39.snapshot`（checksum `94f1922e8472df06c4323f66d31f804d99bbbe9b595fd3268df225f760a86571`），恢复后合并 accepted-only 973 assets；candidate green/1107 points、dense 1024 cosine + BM25、source verified，release manifest fingerprint `cceb6d67322488b48d0fd5719073e5cb95968fc5f518d2b27bfa9fe1bb083087`。
+4. [x] 使用 `/data/KnowledgeHub/writing-materials/releases/writing/knowledgehub_writing_release_20260719_f99463512f16_quality_v2/manifest.json` 显式 stage；staged state 记录 candidate=1107、promotion 未在 build 中发生。
+5. [x] promotion 前复验旧 active、snapshot/fallback、candidate green/1107、release manifest 与 Qdrant alias；随后按用户授权原子 promote `knowledgehub_writing_current`。
+6. [x] promotion 后 Qdrant alias `knowledgehub_writing_current` 指向 v2 release physical collection且 green/1107；旧 active 仍为 green/134。未修改原8条 cases 的 production candidate 评估为8/8目标Top-1、Recall@5=1.0、MRR=1.0、source join=1.0、duplicate=0，报告 fingerprint `f1107316106a1a97a2af58c3aa107501460dc1b06c4adce4c57ccc4ce552fd13`；Hub production alias 对两条旧 miss 的 smoke query 也均返回目标 template Top-1。
+
+实施偏差与恢复记录：第一次 release candidate `quality_v1` 的数据构建和 manifest validation 实际成功，但通用任务账本未把 service status `validated` 识别为成功，任务 `ee3474c4-2f90-4a90-ac4c-5adb5060674b` 因而被误记为 failed。没有覆盖或删除这条历史记录；修复 `_terminal_status` 并增加回归测试后提交 `a153992`，再以新名称 `quality_v2` 完整重建。v2 任务 `03422846-9e9b-4359-8ec4-b0cacad0365b` 正确记录为 completed。最终全仓验证为 pytest 535 passed、Ruff passed、mypy 129 source files passed。
+
+实际修改文件（Phase 7B）：`src/knowledgehub/governance/tasks.py`、`tests/v2/test_task_execution.py`、本计划、`docs/writing_material_extraction_implementation_audit.md` 与设计文档的发布状态注记。运行时新增并保留 release candidate、snapshot、manifest、staged/current promotion state；未删除旧索引、candidate、cache或审核结果，未调用 LLM，未扩大30篇 pilot，未处理完整 Zotero 库。
+
+### Phase 7 结论与下一阶段
+
+Phase 7A/7B 已形成闭环。生产 Writing alias 已部署并保留 rollback fallback；下一阶段不是扩量。若继续质量工作，优先对已 accepted 内容做人工抽样复核、去重/聚类和质量评分校准，并以新 gold cases 验证，任何中文扩量仍须重新进入 selection + dry-run 审批。

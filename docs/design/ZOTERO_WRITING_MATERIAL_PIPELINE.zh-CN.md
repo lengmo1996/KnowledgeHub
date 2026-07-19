@@ -6,7 +6,7 @@ Taxonomy：`writing-taxonomy-v1`
 
 实施注记（2026-07-18）：后续计划 Phase 1-4 已完成。磁盘 artifact 采用 schema v1 closed-world 重校验；Docling provenance 采用 fail-closed contract；审核采用 append-only events + 显式 projection，完整 accepted-v2 snapshot 必须 100% explicit decision；增量入口支持冻结 selection、document/collection selector、哈希 checkpoint resume、stale reason 和幂等 attempt。
 
-Release 注记：clone-and-merge、candidate count/schema validation、显式 stage/promotion/rollback 已封装在 `writing_rag/release.py`，运行边界见 `docs/writing_material_release_runbook.md`。受控 pilot 评估与报告生成见 `writing_rag/pilot.py` 和 `docs/writing_material_pilot_runbook.md`。这些能力默认不连接或修改生产 alias。
+Release 注记：clone-and-merge、candidate count/schema validation、显式 stage/promotion/rollback 已封装在 `writing_rag/release.py`，运行边界见 `docs/writing_material_release_runbook.md`。受控 pilot 评估与报告生成见 `writing_rag/pilot.py` 和 `docs/writing_material_pilot_runbook.md`。这些能力默认不连接或修改生产 alias。2026-07-19 经独立授权和验收，30篇 pilot 的 accepted-only 增量已通过 release candidate `knowledgehub_writing_release_20260719_f99463512f16_quality_v2` stage/promote 到 `knowledgehub_writing_current`；旧134-point physical collection和发布前snapshot均保留为rollback依据，本次没有扩大selection或重新调用LLM。
 
 ## 1. 范围与安全边界
 

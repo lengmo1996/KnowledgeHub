@@ -367,3 +367,32 @@ Zotero Web API metadata + Nutstore WebDAV attachment mirror
 ## 15. 工作区说明
 
 本轮新增的审计和计划文档之外，所有修改/未跟踪文件均为审计开始前已有用户工作。没有修改生产代码，也没有修改 `/data/KnowledgeHub` 中的生产状态、cache、run、accepted snapshot 或索引。
+
+## 16. Phase 7 复审补充（2026-07-19）
+
+本节保留上文历史审计原文，并以当前代码和真实运行证据覆盖其中已经过时的“正式 Writing release 未实现/未执行”结论。
+
+### 16.1 状态更新
+
+- **IMPLEMENTED + VERIFIED**：CJK sparse bigram、独立 `sparse_text`、sparse preprocessing fingerprint、writing asset type query filter；实现提交 `0d743f7`。
+- **IMPLEMENTED + VERIFIED**：Writing clone-and-merge release build、snapshot、manifest validation、显式 stage/promotion/rollback；本轮已实际 stage/promote，不再属于“未实现”。
+- **EXTERNAL_VERIFIED**：`knowledgehub_writing_current` 当前指向 `knowledgehub_writing_release_20260719_f99463512f16_quality_v2`，Qdrant green/1107 points；旧 `knowledgehub_writing_qwen3_4b_1024_v1` green/134 points并保留为 fallback。
+- **VERIFIED**：accepted-only merge 为973/973、source verified、0 failures；release manifest fingerprint 为 `cceb6d67322488b48d0fd5719073e5cb95968fc5f518d2b27bfa9fe1bb083087`。
+- **VERIFIED**：原8条 gold cases 在 release candidate 上全部目标Top-1，Recall@5=1.0、MRR=1.0、source join=1.0、duplicate=0；production alias 对两条历史 miss 的目标 template 也均为Top-1。
+
+### 16.2 审计偏差
+
+第一次 `quality_v1` release build 返回 `status=validated` 且生成了合格 manifest，但 `TaskExecutor._terminal_status` 当时只接受 `success/planned/skipped/completed/available`，导致任务账本误记 failed。修复提交 `a153992` 将 `validated` 映射为 completed，并由 `test_executor_records_validated_release_as_completed` 锁定。错误历史记录未被覆盖；使用新的 `quality_v2` 物理 collection 重建后，任务 `03422846-9e9b-4359-8ec4-b0cacad0365b` 正确为 completed。
+
+### 16.3 本次验证与安全边界
+
+| 验证 | 结果 |
+|---|---|
+| `python -m pytest -q` | `535 passed in 27.57s` |
+| `python -m ruff check .` | passed |
+| `python -m mypy src` | passed，129 source files |
+| release candidate | green/1107，dense 1024 cosine + BM25 |
+| production alias | `knowledgehub_writing_current` -> `...quality_v2` |
+| rollback fallback | 旧 physical green/134 + 发布前 snapshot保留 |
+
+本阶段没有调用真实 LLM，没有重新 extraction，没有扩大30篇 pilot，没有处理完整 Zotero 库，没有删除旧索引、candidate、snapshot、manifest、cache或审核结果。生产变更仅为用户明确授权的 stage/promotion；原有 Zotero RAG、Code/技术知识库集合和旧 Writing physical collection未被覆盖。
