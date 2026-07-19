@@ -134,11 +134,14 @@ def test_retention_quarantine_then_verified_purge(tmp_path) -> None:
     assert purged["run_artifacts_present"] is False
     assert purged["purge_reconciled"] is False
     assert not quarantine.exists()
-    assert service.purge(
-        RUN_ID,
-        confirmed=True,
-        now=datetime(2032, 2, 2, tzinfo=timezone.utc),
-    ) == purged
+    assert (
+        service.purge(
+            RUN_ID,
+            confirmed=True,
+            now=datetime(2032, 2, 2, tzinfo=timezone.utc),
+        )
+        == purged
+    )
 
 
 def test_quarantine_recovers_move_to_receipt_interruption(tmp_path, monkeypatch) -> None:
@@ -188,9 +191,7 @@ def test_expired_run_with_permission_drift_is_blocked(tmp_path) -> None:
     (run_dir / "manifest.json").chmod(0o640)
     result = service.plan(RUN_ID, now=datetime(2032, 1, 1, tzinfo=timezone.utc))
     assert result["status"] == "blocked"
-    assert "accessible by group or other users" in " ".join(
-        result["entries"][0]["blockers"]
-    )
+    assert "accessible by group or other users" in " ".join(result["entries"][0]["blockers"])
 
 
 def test_legacy_cache_migration_binds_all_unscoped_entries_without_changing_response(
@@ -332,9 +333,39 @@ def test_retention_cli_requires_disposal_permission_and_explicit_destructive_fla
             "--yes",
         ]
     )
+    disposition_plan = parser.parse_args(
+        ["writing-material", "retention", "plan-disposition", "--run-id", RUN_ID]
+    )
+    disposition = parser.parse_args(
+        ["writing-material", "retention", "dispose", "--run-id", RUN_ID, "--yes"]
+    )
+    reference_purge = parser.parse_args(
+        [
+            "writing-material",
+            "retention",
+            "purge-references",
+            "--run-id",
+            RUN_ID,
+            "--yes",
+        ]
+    )
+    disposition_purge = parser.parse_args(
+        [
+            "writing-material",
+            "retention",
+            "purge-disposition",
+            "--run-id",
+            RUN_ID,
+            "--yes",
+        ]
+    )
     assert _required_permission(plan) == "writing_material.retention_dispose"
     assert _required_permission(cache_plan) == "writing_material.retention_dispose"
     assert quarantine.yes is True
     assert purge.yes is True
     assert migrate_cache.yes is True
     assert purge_cache.yes is True
+    assert _required_permission(disposition_plan) == "writing_material.retention_dispose"
+    assert disposition.yes is True
+    assert reference_purge.yes is True
+    assert disposition_purge.yes is True

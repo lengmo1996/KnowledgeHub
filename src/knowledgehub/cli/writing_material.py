@@ -34,6 +34,9 @@ from knowledgehub.writing_rag.release_retention import (
     WritingMaterialReleaseRetirementService,
 )
 from knowledgehub.writing_rag.retention import WritingMaterialRetentionService
+from knowledgehub.writing_rag.retention_coordinator import (
+    WritingMaterialRetentionCoordinator,
+)
 from knowledgehub.writing_rag.review import (
     WritingMaterialCandidateIndexer,
     WritingMaterialReviewService,
@@ -87,6 +90,24 @@ def add_writing_material_parser(subparsers: Any) -> None:
     decommission_release = retention_commands.add_parser("decommission-release")
     decommission_release.add_argument("--run-id", required=True)
     decommission_release.add_argument("--yes", action="store_true")
+    reference_purge_plan = retention_commands.add_parser("plan-reference-purge")
+    reference_purge_plan.add_argument("--run-id", required=True)
+    reference_purge_plan.add_argument("--output", type=Path)
+    purge_references = retention_commands.add_parser("purge-references")
+    purge_references.add_argument("--run-id", required=True)
+    purge_references.add_argument("--yes", action="store_true")
+    disposition_plan = retention_commands.add_parser("plan-disposition")
+    disposition_plan.add_argument("--run-id", required=True)
+    disposition_plan.add_argument("--output", type=Path)
+    disposition = retention_commands.add_parser("dispose")
+    disposition.add_argument("--run-id", required=True)
+    disposition.add_argument("--yes", action="store_true")
+    disposition_purge_plan = retention_commands.add_parser("plan-disposition-purge")
+    disposition_purge_plan.add_argument("--run-id", required=True)
+    disposition_purge_plan.add_argument("--output", type=Path)
+    disposition_purge = retention_commands.add_parser("purge-disposition")
+    disposition_purge.add_argument("--run-id", required=True)
+    disposition_purge.add_argument("--yes", action="store_true")
 
     extract = commands.add_parser("extract")
     extract.add_argument("--selection", type=Path)
@@ -241,19 +262,65 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
         if args.writing_material_command == "retention":
             retention = WritingMaterialRetentionService(materials.data_root)
             command = args.writing_material_retention_command
-            if command in {"plan-release-retirement", "decommission-release"}:
+            if command in {
+                "plan-release-retirement",
+                "decommission-release",
+                "plan-reference-purge",
+                "purge-references",
+                "plan-disposition",
+                "dispose",
+                "plan-disposition-purge",
+                "purge-disposition",
+            }:
                 if access is not None:
                     access.require("writing_material.release")
                 retirement = _release_retirement_service(config)
+                coordinator = WritingMaterialRetentionCoordinator(retention, retirement)
                 try:
                     if command == "plan-release-retirement":
                         result = retirement.plan(args.run_id)
                         if args.output is not None:
                             atomic_write_json(args.output, result, mode=0o600)
+                    elif command == "plan-reference-purge":
+                        result = retirement.reference_purge_plan(args.run_id)
+                        if args.output is not None:
+                            atomic_write_json(args.output, result, mode=0o600)
+                    elif command == "plan-disposition":
+                        result = coordinator.plan(args.run_id)
+                        if args.output is not None:
+                            atomic_write_json(args.output, result, mode=0o600)
+                    elif command == "plan-disposition-purge":
+                        result = coordinator.purge_plan(args.run_id)
+                        if args.output is not None:
+                            atomic_write_json(args.output, result, mode=0o600)
                     else:
+                        if command == "decommission-release":
+
+                            def operation() -> dict[str, Any]:
+                                return retirement.decommission(args.run_id, confirmed=args.yes)
+
+                            receipt_group = "release-retirement-receipts"
+                        elif command == "purge-references":
+
+                            def operation() -> dict[str, Any]:
+                                return retirement.purge_references(args.run_id, confirmed=args.yes)
+
+                            receipt_group = "release-reference-purge-receipts"
+                        elif command == "dispose":
+
+                            def operation() -> dict[str, Any]:
+                                return coordinator.dispose(args.run_id, confirmed=args.yes)
+
+                            receipt_group = "coordinated-receipts"
+                        else:
+
+                            def operation() -> dict[str, Any]:
+                                return coordinator.purge(args.run_id, confirmed=args.yes)
+
+                            receipt_group = "coordinated-purge-receipts"
                         result = _executor().execute(
-                            "writing_material_retention_decommission_release",
-                            lambda: retirement.decommission(args.run_id, confirmed=args.yes),
+                            f"writing_material_retention_{command}",
+                            operation,
                             knowledge_base="writing",
                             version=args.run_id,
                             inputs={
@@ -269,7 +336,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                             output_manifest=lambda _value: str(
                                 materials.data_root
                                 / "retention"
-                                / "release-retirement-receipts"
+                                / receipt_group
                                 / f"{args.run_id}.json"
                             ),
                         )

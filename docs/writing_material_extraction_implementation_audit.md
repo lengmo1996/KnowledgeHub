@@ -5,9 +5,9 @@
 - 审计性质：实现状态、验证和后续范围审计；各阶段实际写入边界以对应补充节为准
 - 状态口径：历史基线使用`IMPLEMENTED`、`PARTIAL`、`PLACEHOLDER`、`DOCUMENTED_ONLY`、`NOT_IMPLEMENTED`、`DIVERGED`、`BLOCKED`、`UNKNOWN`；当前态使用`INTERNAL_VERIFIED`、`EXTERNAL_VERIFIED`和明确保留边界
 
-> Phase 9终态注记（2026-07-19，Phase 14B1更新于2026-07-20）：本文第1–15节和其中的`PARTIAL`/`NOT_IMPLEMENTED`矩阵是实施前历史基线，不得再作为当前任务清单。当前30篇correction-v2 extraction为30/30、0失败；2496项complete review、973项accepted derived materials、retrieval/source-join、clone-and-merge production release、质量复审与acknowledgement均已闭环。用户明确保持30篇pilot、不扩量。当前权威状态为本节矩阵、Phase 16–28补充和实施计划Phase 1–14B1。
+> Phase 9终态注记（2026-07-19，Phase 14C更新于2026-07-20）：本文第1–15节和其中的`PARTIAL`/`NOT_IMPLEMENTED`矩阵是实施前历史基线，不得再作为当前任务清单。当前30篇correction-v2 extraction为30/30、0失败；2496项complete review、973项accepted derived materials、retrieval/source-join、clone-and-merge production release、质量复审与acknowledgement均已闭环。用户明确保持30篇pilot、不扩量。当前权威状态为本节矩阵、Phase 16–30补充和实施计划Phase 1–14C。
 
-## 0. 当前态完成性矩阵（更新至2026-07-19）
+## 0. 当前态完成性矩阵（更新至2026-07-20）
 
 本节是当前代码/工件结论；后文状态表继续作为实施前历史基线。状态口径：`INTERNAL_VERIFIED` 表示实现、专项测试和适用运行工件共同证明；`EXTERNAL_PENDING` 表示代码已存在但验收必须依赖新的真实生成、人工判断或用户扩量决定；`WORKTREE_ONLY` 表示实现尚未进入 Git 历史。
 
@@ -28,10 +28,10 @@
 | 全部人工 decision、candidate 检索验收 | `EXTERNAL_VERIFIED` | 2496项complete accepted-v2；隔离candidate 973/973与8-case retrieval/source-join均通过 |
 | 是否扩量 | `EXTERNAL_VERIFIED`（决定） | 用户于2026-07-19明确选择`保持当前 pilot，不扩量`；结果为`stop_at_validated_pilot`，不创建新selection、不继续extraction且不授权promotion |
 | quality review versioning、receipt与acknowledgement | `EXTERNAL_VERIFIED` | versioned accepted revision `rev-2519697bb0043f04f9009e3c`、0600 receipt、audit-v2 fingerprint `c89ebb39...a85e5`；`passed=false`、`review_required=false` |
-| retention/access运行治理 | `EXTERNAL_VERIFIED + PARTIAL` | 当前five-year active至2031-07-19、28/28 paths private、POSIX RBAC启用；1281 cache已逐run scoped且未来可清除。released run仍需Phase 14B2清除7个candidate/release/index引用 |
-| Git 实施历史 | `INTERNAL_VERIFIED` | Phase 14A提交后领先`origin/main` 15 commits；Phase 14B1提交后为16 commits，均尚未push |
+| retention/access运行治理 | `INTERNAL_VERIFIED + CURRENT_NOT_DUE` | 当前five-year active至2031-07-19、28/28 paths private、POSIX RBAC启用；1281 cache逐run scoped。Phase 14C已完成cache→release→run协调处置、双quarantine grace/purge和中断恢复；真实run因未到期只执行零写入plan |
+| Git 实施历史 | `INTERNAL_VERIFIED` | Phase 14B2提交`efd829a`已进入当前`main`；Phase 14C实现、测试和文档在本阶段提交并按用户授权push，不把未push状态误报为远端完成 |
 
-Phase 1–13、Phase 14A与14B1已经完成，当前为`stop_at_acknowledged_quality_findings`：30篇pilot不扩量，production release为1107 points，质量receipt、运行治理和独立POSIX RBAC已验证，rollback真实切换与恢复已完成。到期处置对无引用run和cache scope已闭环，对released collection仍是明确`PARTIAL`。语言分布仍为en=2470、zh=23、und=3；这是当前不扩量范围的代表性边界，不是自动扩量授权。
+Phase 1–14C已经完成，当前为`stop_at_acknowledged_quality_findings`：30篇pilot不扩量，production release为1107 points，质量receipt、运行治理和独立POSIX RBAC已验证，rollback真实切换与恢复已完成。到期处置对cache、released collection、本地引用及run双quarantine形成协调闭环；当前run未到期且未执行真实处置。语言分布仍为en=2470、zh=23、und=3；这是当前不扩量范围的代表性边界，不是自动扩量授权。
 
 ## 1. 结论摘要（实施前历史基线）
 
@@ -571,3 +571,15 @@ Phase 13消除了Phase 10所记录的`identity_enforced=false`当前缺口。历
 - **VERIFIED**：退役/retention/release/governance定向34 passed，另有双RBAC权限测试；全仓579 passed、Ruff passed、mypy 132 source files和`git diff --check`通过。
 
 自动到期处置仍为**PARTIAL**而不是完成：released run的引用解除已经实现，但release-reference quarantine尚缺30天grace后的inventory-verified purge，且cache purge、release retirement和run quarantine仍是三个显式命令。Phase 14C应只做这两个协调闭环，不扩量、不调用LLM、不提前执行当前未到期run。
+
+## 30. Phase 14C 协调式自动到期处置（2026-07-20）
+
+- **IMPLEMENTED**：`WritingMaterialRetentionCoordinator`把cache scope purge、released-run retirement和run quarantine绑定为fingerprinted、confirmation-gated、可恢复的单一处置事务；不引入daemon、队列或依赖。
+- **ORDER ENFORCED**：cache未完全scoped、release plan非ready或治理漂移时不创建处置intent；真实步骤固定为cache→release→run，run不会在派生cache或索引引用仍存在时先行移动。
+- **RECOVERABLE**：各子服务保留独立intent/receipt，coordinator只记录顺序和receipt fingerprint。cache已purge、部分collection/目录已处理、run已rename或coordinator receipt失败均可重试，也可接管先前安全完成的独立处置。
+- **REFERENCE PURGE IMPLEMENTED**：release-reference quarantine采用独立30天grace、逐文件inventory和purge intent/receipt；部分purge恢复、数据重新出现及内容漂移均fail closed。coordinated purge等待run/reference两类grace并分别保留审计receipt。
+- **CLI + RBAC**：`retention {plan-disposition,dispose,plan-disposition-purge,purge-disposition,plan-reference-purge,purge-references}`均受retention-dispose与release双权限控制；mutation使用derive、promotion、per-run retention锁。
+- **CURRENT EXTERNAL DRY-RUN**：真实run为`not_due`，三个步骤均未启用，fingerprint `2c46ec7b...8fcd4`；reference purge为`not_available`，fingerprint `ec84c806...a1320`。二者writes/index/LLM均为false。
+- **VERIFIED**：writing-material 204 passed、全仓588 passed、Ruff passed、mypy 133 source files和`git diff --check`通过。
+
+自动到期处置当前分类更新为**IMPLEMENTED + FIXTURE_VERIFIED + CURRENT_NOT_DUE**。这表示到期时具有安全命令闭环，并不表示当前run已被提前删除，也不表示仓库内新增常驻scheduler。生产run仍active至2031-07-19；外部调度只能在只读plan返回ready后调用确认门控命令。

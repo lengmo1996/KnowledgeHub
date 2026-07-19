@@ -186,11 +186,7 @@ class WritingMaterialRetentionService:
                 "writing-material-cache-purge-receipt-v1",
             )
             current_scan = self._scan_cache(run_id)
-            if (
-                current_scan["invalid"]
-                or current_scan["unscoped"]
-                or current_scan["scoped_to_run"]
-            ):
+            if current_scan["invalid"] or current_scan["unscoped"] or current_scan["scoped_to_run"]:
                 raise RetentionDispositionError(
                     "cache entries appeared after the expired scope was purged"
                 )
@@ -256,6 +252,20 @@ class WritingMaterialRetentionService:
         receipt = {**payload, "artifact_fingerprint": sha256_json(payload)}
         atomic_write_json(receipt_path, receipt, mode=0o600)
         return receipt
+
+    def cache_purge_receipt(self, run_id: str) -> dict[str, Any] | None:
+        path = self.cache_purge_receipt_root / f"{self._validated_run_id(run_id)}.json"
+        return (
+            self._load_artifact(path, "writing-material-cache-purge-receipt-v1")
+            if path.is_file()
+            else None
+        )
+
+    def run_disposition_receipt(self, run_id: str) -> dict[str, Any] | None:
+        path = self.receipt_root / f"{self._validated_run_id(run_id)}.json"
+        return (
+            self._load_artifact(path, RETENTION_RECEIPT_SCHEMA_VERSION) if path.is_file() else None
+        )
 
     def plan(self, run_id: str | None = None, *, now: datetime | None = None) -> dict[str, Any]:
         current = self._utc_now(now)
@@ -345,7 +355,9 @@ class WritingMaterialRetentionService:
         if intent_path.exists():
             existing = self._load_artifact(intent_path, RETENTION_INTENT_SCHEMA_VERSION)
             if existing != intent:
-                raise RetentionDispositionError("retention intent already exists with other content")
+                raise RetentionDispositionError(
+                    "retention intent already exists with other content"
+                )
         else:
             atomic_write_json(intent_path, intent, mode=0o600)
         os.replace(source, destination)
@@ -370,6 +382,9 @@ class WritingMaterialRetentionService:
         receipt_path = self.receipt_root / f"{self._validated_run_id(run_id)}.json"
         receipt = self._load_artifact(receipt_path, RETENTION_RECEIPT_SCHEMA_VERSION)
         if receipt.get("status") == "purged":
+            quarantine = self._quarantine_path(run_id)
+            if quarantine.exists() or quarantine.is_symlink():
+                raise RetentionDispositionError("run data reappeared after retention purge")
             return receipt
         if receipt.get("status") != "quarantined":
             raise RetentionDispositionError("retention receipt is not purgeable")
@@ -387,9 +402,7 @@ class WritingMaterialRetentionService:
             raise RetentionDispositionError("retention quarantine path is unsafe")
         else:
             reconciled = True
-        payload = {
-            key: value for key, value in receipt.items() if key != "artifact_fingerprint"
-        }
+        payload = {key: value for key, value in receipt.items() if key != "artifact_fingerprint"}
         payload.update(
             {
                 "status": "purged",
@@ -544,10 +557,7 @@ class WritingMaterialRetentionService:
             or not isinstance(scopes, list)
             or not scopes
             or scopes != sorted(set(scopes))
-            or any(
-                not isinstance(scope, str) or not _RUN_ID.fullmatch(scope)
-                for scope in scopes
-            )
+            or any(not isinstance(scope, str) or not _RUN_ID.fullmatch(scope) for scope in scopes)
         ):
             raise RetentionDispositionError("LLM cache retention scope is invalid")
         if fingerprint is None and allow_unscoped:
@@ -612,7 +622,9 @@ class WritingMaterialRetentionService:
                 or existing.get("intent_fingerprint") != intent["artifact_fingerprint"]
                 or existing.get("inventory_fingerprint") != intent["inventory_fingerprint"]
             ):
-                raise RetentionDispositionError("retention receipt already exists with other content")
+                raise RetentionDispositionError(
+                    "retention receipt already exists with other content"
+                )
             return existing
         atomic_write_json(receipt_path, result, mode=0o600)
         return result

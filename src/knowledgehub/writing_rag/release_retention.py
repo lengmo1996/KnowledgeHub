@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
-from knowledgehub.core.atomic import atomic_replace, atomic_write_json, ensure_path_within
+from knowledgehub.core.atomic import (
+    atomic_replace,
+    atomic_write_json,
+    ensure_path_within,
+    safe_rmtree,
+)
 from knowledgehub.core.hashing import sha256_file, sha256_json
 from knowledgehub.writing_rag.retention import RetentionDispositionError
 from knowledgehub.writing_rag.review import validate_run_governance
@@ -16,6 +21,9 @@ from knowledgehub.writing_rag.review import validate_run_governance
 RELEASE_RETIREMENT_PLAN_VERSION = "writing-material-release-retirement-plan-v1"
 RELEASE_RETIREMENT_INTENT_VERSION = "writing-material-release-retirement-intent-v1"
 RELEASE_RETIREMENT_RECEIPT_VERSION = "writing-material-release-retirement-receipt-v1"
+REFERENCE_PURGE_PLAN_VERSION = "writing-material-release-reference-purge-plan-v1"
+REFERENCE_PURGE_INTENT_VERSION = "writing-material-release-reference-purge-intent-v1"
+REFERENCE_PURGE_RECEIPT_VERSION = "writing-material-release-reference-purge-receipt-v1"
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _COLLECTION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 
@@ -52,7 +60,10 @@ class WritingMaterialReleaseRetirementService:
         promotion: RetirementPromotion,
         *,
         fallback_collection: str,
+        quarantine_days: int = 30,
     ) -> None:
+        if quarantine_days < 1:
+            raise ValueError("release reference quarantine must be at least one day")
         self.data_root = data_root.expanduser().resolve(strict=False)
         self.runs_root = self.data_root / "runs"
         self.backend = backend
@@ -62,6 +73,9 @@ class WritingMaterialReleaseRetirementService:
         self.intent_root = self.retention_root / "release-retirement-intents"
         self.receipt_root = self.retention_root / "release-retirement-receipts"
         self.quarantine_root = self.retention_root / "release-reference-quarantine"
+        self.purge_intent_root = self.retention_root / "release-reference-purge-intents"
+        self.purge_receipt_root = self.retention_root / "release-reference-purge-receipts"
+        self.quarantine_days = quarantine_days
         self.reference_roots = {
             "index-candidates": self.data_root / "index-candidates",
             "release-candidates": self.data_root / "release-candidates",
@@ -139,7 +153,10 @@ class WritingMaterialReleaseRetirementService:
         intent_path = self.intent_root / f"{run_id}.json"
         receipt_path = self.receipt_root / f"{run_id}.json"
         if receipt_path.exists():
-            return self._load(receipt_path, RELEASE_RETIREMENT_RECEIPT_VERSION)
+            receipt = self._load(receipt_path, RELEASE_RETIREMENT_RECEIPT_VERSION)
+            intent = self._load(intent_path, RELEASE_RETIREMENT_INTENT_VERSION)
+            self._verify_retirement_completion(run_id, intent)
+            return receipt
         if intent_path.exists():
             intent = self._load(intent_path, RELEASE_RETIREMENT_INTENT_VERSION)
         else:
@@ -217,6 +234,270 @@ class WritingMaterialReleaseRetirementService:
         receipt = {**payload, "artifact_fingerprint": sha256_json(payload)}
         atomic_write_json(receipt_path, receipt, mode=0o600)
         return receipt
+
+    def retirement_receipt(self, run_id: str) -> dict[str, Any] | None:
+        path = self.receipt_root / f"{self._run_id(run_id)}.json"
+        return self._load(path, RELEASE_RETIREMENT_RECEIPT_VERSION) if path.is_file() else None
+
+    def validate_retirement(self, run_id: str) -> dict[str, Any]:
+        run_id = self._run_id(run_id)
+        receipt = self.retirement_receipt(run_id)
+        if receipt is None:
+            return {"status": "not_available", "valid": False, "errors": []}
+        try:
+            intent = self._load(
+                self.intent_root / f"{run_id}.json",
+                RELEASE_RETIREMENT_INTENT_VERSION,
+            )
+            self._verify_retirement_completion(run_id, intent)
+        except Exception as exc:
+            return {
+                "status": "blocked",
+                "valid": False,
+                "errors": [f"{type(exc).__name__}: {exc}"],
+                "receipt_fingerprint": receipt["artifact_fingerprint"],
+            }
+        return {
+            "status": "completed",
+            "valid": True,
+            "errors": [],
+            "receipt_fingerprint": receipt["artifact_fingerprint"],
+        }
+
+    def reference_purge_plan(
+        self,
+        run_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        run_id = self._run_id(run_id)
+        current = self._utc_now(now)
+        retirement = self.retirement_receipt(run_id)
+        purge_receipt_path = self.purge_receipt_root / f"{run_id}.json"
+        if purge_receipt_path.is_file():
+            receipt = self._load(purge_receipt_path, REFERENCE_PURGE_RECEIPT_VERSION)
+            if (self.quarantine_root / run_id).exists():
+                return self._reference_purge_plan_result(
+                    run_id,
+                    current,
+                    status="blocked",
+                    purge_after=receipt["purged_at"],
+                    directories=[],
+                    blockers=["release reference data reappeared after purge"],
+                )
+            return self._reference_purge_plan_result(
+                run_id,
+                current,
+                status="purged",
+                purge_after=receipt["purged_at"],
+                directories=[],
+                blockers=[],
+            )
+        purge_intent_path = self.purge_intent_root / f"{run_id}.json"
+        if purge_intent_path.is_file():
+            intent = self._load(purge_intent_path, REFERENCE_PURGE_INTENT_VERSION)
+            purge_after = self._parse_time(intent.get("purge_after"), "purge_after")
+            directories = [dict(item) for item in intent["directories"]]
+            resume_blockers: list[str] = []
+            for item in directories:
+                path = Path(str(item["quarantine_path"]))
+                ensure_path_within(path, self.quarantine_root)
+                if path.is_symlink():
+                    resume_blockers.append(f"release reference quarantine path is unsafe: {path}")
+                elif path.is_dir() and self._inventory(path) != item["inventory"]:
+                    resume_blockers.append(
+                        f"quarantined release reference changed during purge: {path}"
+                    )
+                elif path.exists() and not path.is_dir():
+                    resume_blockers.append(f"release reference quarantine path is unsafe: {path}")
+            status = (
+                "blocked"
+                if resume_blockers
+                else "grace_period"
+                if current < purge_after
+                else "ready"
+            )
+            return self._reference_purge_plan_result(
+                run_id,
+                current,
+                status=status,
+                purge_after=purge_after.isoformat(),
+                directories=directories,
+                blockers=resume_blockers,
+            )
+        if retirement is None:
+            return self._reference_purge_plan_result(
+                run_id,
+                current,
+                status="not_available",
+                purge_after=None,
+                directories=[],
+                blockers=["release retirement has not completed"],
+            )
+        completed_at = self._parse_time(retirement.get("completed_at"), "completed_at")
+        purge_after = completed_at + timedelta(days=self.quarantine_days)
+        intent = self._load(
+            self.intent_root / f"{run_id}.json",
+            RELEASE_RETIREMENT_INTENT_VERSION,
+        )
+        directories = [dict(item) for item in intent["directories"]]
+        blockers: list[str] = []
+        for item in intent["collections"]:
+            collection = self._collection(str(item["collection"]))
+            if self.backend.inspect(collection).get("exists"):
+                blockers.append(f"retired collection reappeared: {collection}")
+            if self.backend.alias_target("knowledgehub_writing_current") == collection:
+                blockers.append(f"live alias targets retired collection: {collection}")
+        for item in directories:
+            path = Path(str(item["quarantine_path"]))
+            ensure_path_within(path, self.quarantine_root)
+            if not path.is_dir() or self._inventory(path) != item["inventory"]:
+                blockers.append(f"quarantined release reference changed or is missing: {path}")
+        if blockers:
+            status = "blocked"
+        elif current < purge_after:
+            status = "grace_period"
+        else:
+            status = "ready"
+        return self._reference_purge_plan_result(
+            run_id,
+            current,
+            status=status,
+            purge_after=purge_after.isoformat(),
+            directories=directories,
+            blockers=blockers,
+        )
+
+    def purge_references(
+        self,
+        run_id: str,
+        *,
+        confirmed: bool,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        if not confirmed:
+            raise RetentionDispositionError(
+                "release reference purge requires explicit confirmation"
+            )
+        run_id = self._run_id(run_id)
+        current = self._utc_now(now)
+        self._prepare_dirs()
+        intent_path = self.purge_intent_root / f"{run_id}.json"
+        receipt_path = self.purge_receipt_root / f"{run_id}.json"
+        if receipt_path.is_file():
+            receipt = self._load(receipt_path, REFERENCE_PURGE_RECEIPT_VERSION)
+            if (self.quarantine_root / run_id).exists():
+                raise RetentionDispositionError("release reference data reappeared after purge")
+            return receipt
+        if intent_path.is_file():
+            intent = self._load(intent_path, REFERENCE_PURGE_INTENT_VERSION)
+        else:
+            plan = self.reference_purge_plan(run_id, now=current)
+            if plan["status"] != "ready":
+                raise RetentionDispositionError("release reference purge plan is not ready")
+            payload = {
+                "schema_version": REFERENCE_PURGE_INTENT_VERSION,
+                "run_id": run_id,
+                "planned_at": current.isoformat(),
+                "purge_after": plan["purge_after"],
+                "plan_fingerprint": plan["artifact_fingerprint"],
+                "directories": plan["directories"],
+            }
+            intent = {**payload, "artifact_fingerprint": sha256_json(payload)}
+            atomic_write_json(intent_path, intent, mode=0o600)
+        if current < self._parse_time(intent.get("purge_after"), "purge_after"):
+            raise RetentionDispositionError("release reference quarantine grace period is active")
+        reconciled = False
+        for item in intent["directories"]:
+            path = Path(str(item["quarantine_path"]))
+            ensure_path_within(path, self.quarantine_root)
+            if path.is_dir():
+                if self._inventory(path) != item["inventory"]:
+                    raise RetentionDispositionError(
+                        "quarantined release reference changed before purge"
+                    )
+                safe_rmtree(path, root=self.quarantine_root, missing_ok=False)
+            elif path.exists() or path.is_symlink():
+                raise RetentionDispositionError("release reference quarantine path is unsafe")
+            else:
+                reconciled = True
+        run_root = self.quarantine_root / run_id
+        if run_root.is_dir():
+            if self._inventory(run_root):
+                raise RetentionDispositionError(
+                    "unexpected release reference remains in quarantine"
+                )
+            safe_rmtree(run_root, root=self.quarantine_root, missing_ok=False)
+        retirement = self.retirement_receipt(run_id)
+        if retirement is None:
+            raise RetentionDispositionError("release retirement receipt disappeared before purge")
+        payload = {
+            "schema_version": REFERENCE_PURGE_RECEIPT_VERSION,
+            "status": "purged",
+            "run_id": run_id,
+            "retirement_receipt_fingerprint": retirement["artifact_fingerprint"],
+            "intent_fingerprint": intent["artifact_fingerprint"],
+            "purged_directories": len(intent["directories"]),
+            "purged_at": current.isoformat(),
+            "purge_reconciled": reconciled,
+            "llm_called": False,
+        }
+        receipt = {**payload, "artifact_fingerprint": sha256_json(payload)}
+        atomic_write_json(receipt_path, receipt, mode=0o600)
+        return receipt
+
+    def _verify_retirement_completion(
+        self,
+        run_id: str,
+        intent: Mapping[str, Any],
+    ) -> None:
+        references, reference_errors = self._references(run_id)
+        if references or reference_errors:
+            raise RetentionDispositionError(
+                "release references reappeared after retirement completion"
+            )
+        for item in intent["collections"]:
+            collection = self._collection(str(item["collection"]))
+            if self.backend.inspect(collection).get("exists"):
+                raise RetentionDispositionError("retired collection reappeared after completion")
+            if self.backend.alias_target("knowledgehub_writing_current") == collection:
+                raise RetentionDispositionError("live alias returned to a retired collection")
+        references_purged = (self.purge_receipt_root / f"{run_id}.json").is_file()
+        for item in intent["directories"]:
+            destination = Path(str(item["quarantine_path"]))
+            ensure_path_within(destination, self.quarantine_root)
+            if references_purged and not destination.exists():
+                continue
+            if not destination.is_dir() or self._inventory(destination) != item["inventory"]:
+                raise RetentionDispositionError(
+                    "quarantined release reference changed after retirement"
+                )
+
+    def _reference_purge_plan_result(
+        self,
+        run_id: str,
+        now: datetime,
+        *,
+        status: str,
+        purge_after: str | None,
+        directories: list[dict[str, Any]],
+        blockers: list[str],
+    ) -> dict[str, Any]:
+        payload = {
+            "schema_version": REFERENCE_PURGE_PLAN_VERSION,
+            "status": status,
+            "run_id": run_id,
+            "created_at": now.isoformat(),
+            "quarantine_days": self.quarantine_days,
+            "purge_after": purge_after,
+            "directories": directories,
+            "blockers": blockers,
+            "dry_run": True,
+            "writes_performed": False,
+            "index_modified": False,
+            "llm_called": False,
+        }
+        return {**payload, "artifact_fingerprint": sha256_json(payload)}
 
     def _verify_resume_safety(self, intent: Mapping[str, Any], *, now: datetime) -> None:
         run_id = self._run_id(str(intent.get("run_id") or ""))
@@ -507,6 +788,8 @@ class WritingMaterialReleaseRetirementService:
             self.intent_root,
             self.receipt_root,
             self.quarantine_root,
+            self.purge_intent_root,
+            self.purge_receipt_root,
         ):
             if path.is_symlink():
                 raise RetentionDispositionError("release retirement state path is a symlink")
@@ -530,6 +813,16 @@ class WritingMaterialReleaseRetirementService:
         if current.tzinfo is None:
             raise ValueError("release retirement time must include a timezone")
         return current.astimezone(timezone.utc)
+
+    @staticmethod
+    def _parse_time(value: Any, label: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError as exc:
+            raise RetentionDispositionError(f"release retirement {label} is invalid") from exc
+        if parsed.tzinfo is None:
+            raise RetentionDispositionError(f"release retirement {label} must include a timezone")
+        return parsed.astimezone(timezone.utc)
 
     @staticmethod
     def _run_id(value: str) -> str:

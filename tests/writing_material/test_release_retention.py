@@ -10,10 +10,17 @@ import pytest
 from knowledgehub.cli.writing_material import add_writing_material_parser
 from knowledgehub.core.atomic import atomic_write_json
 from knowledgehub.core.hashing import sha256_json
+from knowledgehub.writing_rag.extract import LLMCache
 from knowledgehub.writing_rag.release_retention import (
     WritingMaterialReleaseRetirementService,
 )
-from knowledgehub.writing_rag.retention import RetentionDispositionError
+from knowledgehub.writing_rag.retention import (
+    RetentionDispositionError,
+    WritingMaterialRetentionService,
+)
+from knowledgehub.writing_rag.retention_coordinator import (
+    WritingMaterialRetentionCoordinator,
+)
 
 RUN_ID = "run-release-retirement"
 ACTIVE = "writing_release_current_fixture"
@@ -287,6 +294,281 @@ def test_release_retirement_resume_rejects_new_collection_owner(tmp_path: Path) 
     with pytest.raises(RetentionDispositionError, match="another run owner"):
         service.decommission(RUN_ID, confirmed=True, now=expired)
     assert backend.inspect(ACTIVE)["exists"] is True
+
+
+def test_release_reference_quarantine_has_grace_and_recovers_partial_purge(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service, _, _, _ = _service(tmp_path)
+    _reference(service, ACTIVE)
+    _reference(service, HISTORICAL)
+    disposed_at = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    service.decommission(RUN_ID, confirmed=True, now=disposed_at)
+    grace = service.reference_purge_plan(
+        RUN_ID,
+        now=datetime(2032, 1, 30, tzinfo=timezone.utc),
+    )
+    assert grace["status"] == "grace_period"
+    assert grace["writes_performed"] is False
+    with pytest.raises(RetentionDispositionError, match="explicit confirmation"):
+        service.purge_references(
+            RUN_ID,
+            confirmed=False,
+            now=datetime(2032, 2, 1, tzinfo=timezone.utc),
+        )
+
+    import knowledgehub.writing_rag.release_retention as release_retention_module
+
+    real_remove = release_retention_module.safe_rmtree
+    calls = 0
+
+    def flaky_remove(path, *, root, missing_ok=True):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("fixture reference purge interruption")
+        return real_remove(path, root=root, missing_ok=missing_ok)
+
+    monkeypatch.setattr(release_retention_module, "safe_rmtree", flaky_remove)
+    purge_at = datetime(2032, 2, 1, tzinfo=timezone.utc)
+    with pytest.raises(OSError, match="purge interruption"):
+        service.purge_references(RUN_ID, confirmed=True, now=purge_at)
+    assert service.reference_purge_plan(RUN_ID, now=purge_at)["status"] == "ready"
+    receipt = service.purge_references(RUN_ID, confirmed=True, now=purge_at)
+    assert receipt["status"] == "purged"
+    assert receipt["purged_directories"] == 2
+    assert receipt["purge_reconciled"] is True
+    assert not (service.quarantine_root / RUN_ID).exists()
+    assert service.reference_purge_plan(RUN_ID, now=purge_at)["status"] == "purged"
+
+
+def test_coordinator_orders_cache_release_run_and_purges_both_quarantines(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release, _, _, _ = _service(tmp_path)
+    _reference(release, ACTIVE)
+    _reference(release, HISTORICAL)
+    retention = WritingMaterialRetentionService(release.data_root, quarantine_days=30)
+    cache = LLMCache(retention.cache_root)
+    cache.put(
+        "owned",
+        {"operation": "fixture", "response": {"value": "owned"}},
+        retention_scope_run_id=RUN_ID,
+    )
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    expired = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    plan = coordinator.plan(RUN_ID, now=expired)
+    assert plan["status"] == "ready"
+    assert plan["steps"]["cache_scope_purge"]["status"] == "pending"
+    assert plan["steps"]["release_retirement"]["status"] == "pending"
+
+    order: list[str] = []
+    real_cache = retention.purge_cache_scope
+    real_release = release.decommission
+    real_run = retention.quarantine
+
+    def ordered_cache(*args, **kwargs):  # type: ignore[no-untyped-def]
+        order.append("cache")
+        return real_cache(*args, **kwargs)
+
+    def ordered_release(*args, **kwargs):  # type: ignore[no-untyped-def]
+        order.append("release")
+        return real_release(*args, **kwargs)
+
+    def ordered_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        order.append("run")
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(retention, "purge_cache_scope", ordered_cache)
+    monkeypatch.setattr(release, "decommission", ordered_release)
+    monkeypatch.setattr(retention, "quarantine", ordered_run)
+    with pytest.raises(RetentionDispositionError, match="explicit confirmation"):
+        coordinator.dispose(RUN_ID, confirmed=False, now=expired)
+    receipt = coordinator.dispose(RUN_ID, confirmed=True, now=expired)
+    assert receipt["status"] == "completed"
+    assert order == ["cache", "release", "run"]
+    assert cache.get("owned") is None
+    assert coordinator.plan(RUN_ID, now=expired)["status"] == "completed"
+
+    purge_at = datetime(2032, 2, 1, tzinfo=timezone.utc)
+    assert coordinator.purge_plan(RUN_ID, now=purge_at)["status"] == "ready"
+    purged = coordinator.purge(RUN_ID, confirmed=True, now=purge_at)
+    assert purged["status"] == "purged"
+    assert not retention._quarantine_path(RUN_ID).exists()
+    assert not (release.quarantine_root / RUN_ID).exists()
+    assert coordinator.purge_plan(RUN_ID, now=purge_at)["status"] == "purged"
+
+
+def test_coordinator_not_due_plan_does_not_touch_qdrant(tmp_path: Path) -> None:
+    release, backend, _, _ = _service(tmp_path)
+    retention = WritingMaterialRetentionService(release.data_root)
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    result = coordinator.plan(
+        RUN_ID,
+        now=datetime(2031, 7, 19, 6, 47, 31, tzinfo=timezone.utc),
+    )
+    assert result["status"] == "not_due"
+    assert result["writes_performed"] is False
+    assert backend.inspect_calls == 0
+
+
+def test_coordinator_blocks_unscoped_cache_before_any_disposition(tmp_path: Path) -> None:
+    release, _, _, _ = _service(tmp_path)
+    _reference(release, ACTIVE)
+    retention = WritingMaterialRetentionService(release.data_root)
+    LLMCache(retention.cache_root).put(
+        "legacy",
+        {"operation": "fixture", "response": {"legacy": True}},
+    )
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    expired = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    plan = coordinator.plan(RUN_ID, now=expired)
+    assert plan["status"] == "blocked"
+    assert plan["steps"]["cache_scope_purge"]["status"] == "blocked"
+    with pytest.raises(RetentionDispositionError, match="plan is not ready"):
+        coordinator.dispose(RUN_ID, confirmed=True, now=expired)
+    assert release.backend.alias_target("knowledgehub_writing_current") == ACTIVE
+    assert (release.runs_root / RUN_ID).is_dir()
+
+
+def test_coordinator_handles_unreleased_run_without_reference_purge(tmp_path: Path) -> None:
+    release, _, _, _ = _service(tmp_path)
+    retention = WritingMaterialRetentionService(release.data_root)
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    disposed_at = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    plan = coordinator.plan(RUN_ID, now=disposed_at)
+    assert plan["status"] == "ready"
+    assert plan["steps"]["release_retirement"] == {
+        "status": "not_required",
+        "required": False,
+    }
+    receipt = coordinator.dispose(RUN_ID, confirmed=True, now=disposed_at)
+    assert receipt["release_retirement_receipt_fingerprint"] is None
+    purge_at = datetime(2032, 2, 1, tzinfo=timezone.utc)
+    purge_plan = coordinator.purge_plan(RUN_ID, now=purge_at)
+    assert purge_plan["status"] == "ready"
+    assert purge_plan["release_references"]["status"] == "not_required"
+    purged = coordinator.purge(RUN_ID, confirmed=True, now=purge_at)
+    assert purged["reference_purge_receipt_fingerprint"] is None
+
+
+def test_coordinator_recovers_receipt_after_run_quarantine_interruption(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release, _, _, _ = _service(tmp_path)
+    _reference(release, ACTIVE)
+    retention = WritingMaterialRetentionService(release.data_root)
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    import knowledgehub.writing_rag.retention_coordinator as coordinator_module
+
+    real_write = coordinator_module.atomic_write_json
+    failed = False
+
+    def flaky_write(path: Path, value: object, *, mode: int = 0o644) -> Path:
+        nonlocal failed
+        if Path(path).parent == coordinator.receipt_root and not failed:
+            failed = True
+            raise OSError("fixture coordinator receipt interruption")
+        return real_write(path, value, mode=mode)
+
+    monkeypatch.setattr(coordinator_module, "atomic_write_json", flaky_write)
+    expired = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    with pytest.raises(OSError, match="receipt interruption"):
+        coordinator.dispose(RUN_ID, confirmed=True, now=expired)
+    assert retention.run_disposition_receipt(RUN_ID)["status"] == "quarantined"
+    receipt = coordinator.dispose(RUN_ID, confirmed=True, now=expired)
+    assert receipt["status"] == "completed"
+
+
+def test_coordinator_adopts_independently_completed_safe_disposition(tmp_path: Path) -> None:
+    release, _, _, _ = _service(tmp_path)
+    _reference(release, ACTIVE)
+    retention = WritingMaterialRetentionService(release.data_root)
+    expired = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    release.decommission(RUN_ID, confirmed=True, now=expired)
+    retention.quarantine(RUN_ID, confirmed=True, now=expired)
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    assert coordinator.plan(RUN_ID, now=expired)["status"] == "completed"
+    receipt = coordinator.dispose(RUN_ID, confirmed=True, now=expired)
+    assert receipt["status"] == "completed"
+    intent = coordinator._load(
+        coordinator.intent_root / f"{RUN_ID}.json",
+        "writing-material-coordinated-disposition-intent-v1",
+    )
+    assert intent["recovered_existing_disposition"] is True
+    purge_plan = coordinator.purge_plan(
+        RUN_ID,
+        now=datetime(2032, 2, 1, tzinfo=timezone.utc),
+    )
+    assert purge_plan["release_references"]["status"] == "ready"
+
+
+def test_coordinated_purge_recovers_after_reference_step_completed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release, _, _, _ = _service(tmp_path)
+    _reference(release, ACTIVE)
+    retention = WritingMaterialRetentionService(release.data_root)
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    disposed_at = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    coordinator.dispose(RUN_ID, confirmed=True, now=disposed_at)
+    real_purge = retention.purge
+    failed = False
+
+    def flaky_run_purge(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("fixture run purge interruption")
+        return real_purge(*args, **kwargs)
+
+    monkeypatch.setattr(retention, "purge", flaky_run_purge)
+    purge_at = datetime(2032, 2, 1, tzinfo=timezone.utc)
+    with pytest.raises(OSError, match="run purge interruption"):
+        coordinator.purge(RUN_ID, confirmed=True, now=purge_at)
+    assert release.reference_purge_plan(RUN_ID, now=purge_at)["status"] == "purged"
+    assert retention.run_disposition_receipt(RUN_ID)["status"] == "quarantined"
+    receipt = coordinator.purge(RUN_ID, confirmed=True, now=purge_at)
+    assert receipt["status"] == "purged"
+
+
+def test_coordinator_blocks_cache_scope_reappearing_after_partial_disposition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release, _, _, _ = _service(tmp_path)
+    _reference(release, ACTIVE)
+    retention = WritingMaterialRetentionService(release.data_root)
+    cache = LLMCache(retention.cache_root)
+    cache.put(
+        "initial",
+        {"operation": "fixture", "response": {"initial": True}},
+        retention_scope_run_id=RUN_ID,
+    )
+    coordinator = WritingMaterialRetentionCoordinator(retention, release)
+    real_release = release.decommission
+    failed = False
+
+    def flaky_release(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError("fixture release interruption")
+        return real_release(*args, **kwargs)
+
+    monkeypatch.setattr(release, "decommission", flaky_release)
+    expired = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    with pytest.raises(OSError, match="release interruption"):
+        coordinator.dispose(RUN_ID, confirmed=True, now=expired)
+    cache.put(
+        "appeared",
+        {"operation": "fixture", "response": {"appeared": True}},
+        retention_scope_run_id=RUN_ID,
+    )
+    plan = coordinator.plan(RUN_ID, now=expired)
+    assert plan["status"] == "blocked"
+    assert "provider cache scope reappeared after purge" in plan["blockers"]
+    with pytest.raises(RetentionDispositionError, match="appeared after"):
+        coordinator.dispose(RUN_ID, confirmed=True, now=expired)
 
 
 def test_release_retirement_blocks_shared_collection_and_invalid_fingerprint(

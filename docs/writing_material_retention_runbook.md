@@ -1,6 +1,6 @@
 # Writing-material 到期处置手册
 
-当前入口为`knowledgehub writing-material retention {plan,quarantine,purge}`。它不启动常驻scheduler或任务队列；外部cron/systemd timer可以安全调用只读plan，并对单个`ready` run执行后续命令。所有子命令均要求RBAC `writing_material.retention_dispose`权限。
+当前入口为`knowledgehub writing-material retention ...`。它不启动常驻scheduler或任务队列；外部cron/systemd timer可以安全调用只读plan，并对单个`ready` run执行后续命令。普通run处置要求RBAC `writing_material.retention_dispose`；涉及release/alias/collection的计划和处置还要求`writing_material.release`。
 
 ## 两阶段处置
 
@@ -11,6 +11,10 @@ knowledgehub writing-material retention migrate-cache-scope --run-id RUN_ID --ye
 knowledgehub writing-material retention purge-cache-scope --run-id RUN_ID --yes
 knowledgehub writing-material retention plan-release-retirement --run-id RUN_ID
 knowledgehub writing-material retention decommission-release --run-id RUN_ID --yes
+knowledgehub writing-material retention plan-disposition --run-id RUN_ID
+knowledgehub writing-material retention dispose --run-id RUN_ID --yes
+knowledgehub writing-material retention plan-disposition-purge --run-id RUN_ID
+knowledgehub writing-material retention purge-disposition --run-id RUN_ID --yes
 knowledgehub writing-material retention quarantine --run-id RUN_ID --yes
 knowledgehub writing-material retention purge --run-id RUN_ID --yes
 ```
@@ -32,7 +36,20 @@ knowledgehub writing-material retention purge --run-id RUN_ID --yes
 
 `decommission-release --yes`的固定顺序是：写intent；必要时把stable alias原子rollback到独立fallback；验证alias已离开目标集合；删除run独占physical collections；将本地candidate/release目录atomic rename到`retention/release-reference-quarantine/<run-id>/`；清除retired previous/staged promotion引用；写receipt。若run只是previous rollback target，不执行多余rollback。每次重试均复验collection inspection、目录inventory和owner集合，因此新owner或内容漂移不会被旧intent绕过。
 
-该操作同时要求RBAC `writing_material.retention_dispose`与`writing_material.release`。当前release-reference quarantine还不能由`retention purge`删除；Phase 14C完成独立grace/purge前必须保留。
+该操作同时要求RBAC `writing_material.retention_dispose`与`writing_material.release`。release-reference quarantine由`plan-reference-purge`和`purge-references --yes`管理：从retirement receipt的completed_at起保留30天，purge前复验每个目录inventory，部分删除中断可恢复。
+
+## 推荐自动协调入口
+
+外部scheduler不要自行拼接分散子命令，优先使用：
+
+```bash
+knowledgehub writing-material retention plan-disposition --run-id RUN_ID
+knowledgehub writing-material retention dispose --run-id RUN_ID --yes
+knowledgehub writing-material retention plan-disposition-purge --run-id RUN_ID
+knowledgehub writing-material retention purge-disposition --run-id RUN_ID --yes
+```
+
+`dispose`只在coordinated plan为ready时写intent，并严格调用cache scope purge、release retirement、run quarantine。任一步失败后重复同一命令即可根据子receipt恢复。`purge-disposition`等待run和reference quarantine各自30天grace，先清理reference，再清理run；未发布run自动把reference步骤标为not_required。
 
 ## 阻断条件
 
@@ -53,4 +70,4 @@ knowledgehub writing-material retention purge --run-id RUN_ID --yes
 
 初始cache dry-run为1281 total/1281 unscoped/0 invalid。Phase 14B1已迁移为1281 scoped-to-run/0 unscoped/invalid，scope与response fingerprint各0 mismatch；没有修改response或删除cache。使用到期时刻进行只读未来模拟，当前剩余动作是先purge已知cache scope并处理7个candidate/release引用。collection与alias处置由Phase 14B2完成。
 
-Phase 14B2当前真实plan fingerprint为`b0e937cf0b1ab2579f2623fe93184d60faace418202dd0f8c3621029c64a295d`，状态`not_due`；没有切换alias、删除collection或移动7个真实目录。到期后的released-run退役路径已实现，完整无人值守协调与reference-quarantine purge留给Phase 14C。
+Phase 14B2真实release plan fingerprint为`b0e937cf0b1ab2579f2623fe93184d60faace418202dd0f8c3621029c64a295d`。Phase 14C真实coordinated plan fingerprint为`2c46ec7b78ca69696cd2594f80a30381faf294991092d70e9a32070299e8fcd4`，状态`not_due`、三个步骤均未启用；reference purge plan为`not_available`，fingerprint `ec84c806bfd02d297b736d05cdbdfaa28aa67191b40eebae497499dc835a1320`。没有切换alias、删除collection/cache或移动真实目录。
