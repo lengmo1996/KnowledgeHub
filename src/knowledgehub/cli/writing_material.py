@@ -30,6 +30,7 @@ from knowledgehub.writing_rag.pilot import (
     provider_preflight,
 )
 from knowledgehub.writing_rag.release import QdrantReleaseBackend, WritingMaterialReleaseService
+from knowledgehub.writing_rag.retention import WritingMaterialRetentionService
 from knowledgehub.writing_rag.review import (
     WritingMaterialCandidateIndexer,
     WritingMaterialReviewService,
@@ -56,6 +57,20 @@ def add_writing_material_parser(subparsers: Any) -> None:
     access_commands.add_parser("status")
     check_access = access_commands.add_parser("check")
     check_access.add_argument("--permission", choices=sorted(RBAC_PERMISSIONS), required=True)
+
+    retention = commands.add_parser("retention")
+    retention_commands = retention.add_subparsers(
+        dest="writing_material_retention_command", required=True
+    )
+    retention_plan = retention_commands.add_parser("plan")
+    retention_plan.add_argument("--run-id")
+    retention_plan.add_argument("--output", type=Path)
+    retention_quarantine = retention_commands.add_parser("quarantine")
+    retention_quarantine.add_argument("--run-id", required=True)
+    retention_quarantine.add_argument("--yes", action="store_true")
+    retention_purge = retention_commands.add_parser("purge")
+    retention_purge.add_argument("--run-id", required=True)
+    retention_purge.add_argument("--yes", action="store_true")
 
     extract = commands.add_parser("extract")
     extract.add_argument("--selection", type=Path)
@@ -209,6 +224,36 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
             materials.literature_data_dir,
             access_authorization=access_authorization,
         )
+        if args.writing_material_command == "retention":
+            retention = WritingMaterialRetentionService(materials.data_root)
+            command = args.writing_material_retention_command
+            if command == "plan":
+                result = retention.plan(args.run_id)
+                if args.output is not None:
+                    atomic_write_json(args.output, result, mode=0o600)
+            else:
+                if command == "quarantine":
+                    def operation() -> dict[str, Any]:
+                        return retention.quarantine(args.run_id, confirmed=args.yes)
+                else:
+                    def operation() -> dict[str, Any]:
+                        return retention.purge(args.run_id, confirmed=args.yes)
+                result = _executor().execute(
+                    f"writing_material_retention_{command}",
+                    operation,
+                    knowledge_base="writing",
+                    version=args.run_id,
+                    inputs={"run_id": args.run_id, "operation": command, "confirmed": args.yes},
+                    lock_keys=(f"retention:writing-materials:{args.run_id}",),
+                    output_manifest=lambda _value: str(
+                        materials.data_root
+                        / "retention"
+                        / "receipts"
+                        / f"{args.run_id}.json"
+                    ),
+                )
+            _emit(result)
+            return 0 if result.get("status") not in {"blocked", "failed"} else 1
         if args.writing_material_command == "extract":
             selection = _selection_for_extract(args, review)
             pilot_approval = (
@@ -558,6 +603,8 @@ def _required_permission(args: argparse.Namespace) -> str:
         return "writing_material.index"
     if command == "release":
         return "writing_material.release"
+    if command == "retention":
+        return "writing_material.retention_dispose"
     if command == "pilot":
         pilot_command = args.writing_material_pilot_command
         if pilot_command == "approve-extraction":

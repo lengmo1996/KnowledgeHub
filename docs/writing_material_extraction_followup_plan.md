@@ -2,7 +2,7 @@
 
 - 基线审计：`docs/writing_material_extraction_implementation_audit.md`
 - 原则：只列未完成或需修正工作；先 provenance/exact-span/schema/dry-run，再扩量；正式索引前必须有人审 gate
-- 当前状态：Phase 1–13全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。production alias经真实可逆rollback演练后已恢复为quality-v2 active/1107。用户保持30篇pilot、不扩量。质量finding已全部acknowledged；five-year retention active至2031-07-19、28/28 run paths private；独立POSIX身份RBAC已为`lengmo`启用。没有新的LLM、扩量、审核内容修改或索引重建。
+- 当前状态：Phase 1–13及Phase 14A全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。production alias经真实可逆rollback演练后已恢复为quality-v2 active/1107。用户保持30篇pilot、不扩量。质量finding已全部acknowledged；five-year retention active至2031-07-19、28/28 run paths private；独立POSIX身份RBAC已为`lengmo`启用。到期run的安全quarantine/宽限期purge闭环已实现；当前released run的索引引用和shared cache清除进入Phase 14B。没有新的LLM、扩量、审核内容修改或索引重建。
 
 ## Phase 1：状态与 schema 安全收口（P0）
 
@@ -846,3 +846,19 @@ Phase 12结论：真实alias switch和同机制恢复均已外部验证，回滚
 实际修改文件：`src/knowledgehub/writing_rag/access.py`、`src/knowledgehub/writing_rag/review.py`、`src/knowledgehub/cli/writing_material.py`、`src/knowledgehub/hub/config.py`、`configs/writing_materials.yaml`、`tests/writing_material/test_access.py`、`tests/writing_material/test_extract_review.py`、pilot runbook、设计文档、本计划与实施审计。
 
 Phase 13结论：当前`local reviewer only`不再只依赖文件mode；实际CLI入口同时强制有效POSIX身份和角色权限。该实现是单机POSIX信任域，不宣称为跨主机IdP、MFA或远程服务认证；策略bootstrap不可静默覆盖。没有LLM、extraction、review/index/alias写入或新依赖，唯一真实数据写入是已授权的RBAC策略。
+
+## Phase 14A：到期处置安全闭环（2026-07-20）
+
+1. [x] 新增fingerprinted retention plan，支持单run或全run只读扫描；解析five-year到期时间、检查private governance、生成逐文件size/SHA-256 inventory并明确零写入。
+2. [x] 仅对`expired + unreferenced + scoped-cache-safe` run开放quarantine；candidate/release引用、真实provider shared cache、权限/symlink/manifest异常全部fail closed。
+3. [x] quarantine先写0600 intent，再以同文件系统atomic rename移动到0700 retention quarantine，最后写0600 receipt；要求RBAC `retention_dispose`及显式`--yes`。
+4. [x] 默认30天恢复窗口；purge前重验receipt与完整inventory，内容漂移或宽限期未到拒绝，使用root-contained safe removal；完成和重复purge均可审计。
+5. [x] 覆盖rename后/receipt前中断恢复：重试根据intent和inventory补记receipt，不覆盖其他内容；quarantine和purge均具幂等语义。
+6. [x] 新增CLI `retention {plan,quarantine,purge}`并纳入TaskStore lock/audit；没有新增daemon、任务队列或依赖，允许现有cron/systemd按run调度。
+7. [x] 当前真实run只读plan为`not_due`、expires_at=`2031-07-19T06:47:32.819105+00:00`、fingerprint `3506c5f5882cb2c1aa4936c27b9176174191bc9a0d93af8a2ae8c3892e7ada4d`，零写入。
+8. [x] 到期时刻只读模拟为blocked：7个candidate/release引用、23个run文件、provider cache未按run分区；没有绕过这些前置依赖删除当前run。
+9. [x] fixture覆盖未到期、到期ready、引用/cache阻断、confirmation、quarantine/purge、宽限期、中断恢复、内容/权限漂移和CLI权限；writing-material 182 passed、全仓566 passed、Ruff、mypy 131 source files及`git diff --check`通过。
+
+实际修改文件：`src/knowledgehub/writing_rag/retention.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_retention.py`、retention runbook、设计文档、本计划与实施审计。
+
+Phase 14A结论：未发布、无共享cache依赖的到期run已经具备安全自动处置闭环；当前production run不会因到期而留下不可追踪副本。完整自动到期处置尚未标记完成：Phase 14B必须先实现逐run cache scope和所有candidate/release/index副本的可验证deindex/引用解除，再允许当前released run进入quarantine。当前真实run仍未到期，本阶段没有删除或移动任何真实数据。
