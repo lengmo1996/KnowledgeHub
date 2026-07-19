@@ -2,7 +2,7 @@
 
 - 基线审计：`docs/writing_material_extraction_implementation_audit.md`
 - 原则：只列未完成或需修正工作；先 provenance/exact-span/schema/dry-run，再扩量；正式索引前必须有人审 gate
-- 当前状态：Phase 1-5、Phase 6A、Phase 6A.1-6A.7、Phase 6B.1–6B.1.15 contract hardening、当前30篇真实 extraction、Phase 6B.2全量审核和Phase 6B.3隔离candidate检索验收均已完成。run `20260719T064746Z-f99463512f16` 为30/30、0失败；2496条hash-bound decision全部accepted，complete snapshot为pending=0。新隔离collection `knowledgehub_writing_material_candidate_20260719_f99463512f16` accepted-only写入973/973 derived assets，生产Writing保持134 points；8条中英文sparse用例得到recall@5=0.75、MRR=0.75、source-join=1.0、duplicate=0，最终全部pilot gates通过并返回`eligible_for_manual_expansion_decision`。Phase 6仅余工作项9的用户扩量决定，尚未扩量、promotion或修改生产索引
+- 当前状态：Phase 1–8全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。Phase 7已修复两条retrieval miss并完成clone-and-merge promotion，磁盘production alias state为quality-v2 active/1107，旧134-point physical保留。用户决定保持30篇pilot、不扩量。Phase 8完成36项全部accepted质量复审、versioned accepted、receipt和audit-v2；当前36 flagged全部acknowledged、0 unreviewed，`passed=false`但`review_required=false`。当前无未勾选任务，也没有新的LLM、扩量或索引授权。
 
 ## Phase 1：状态与 schema 安全收口（P0）
 
@@ -777,3 +777,14 @@ Phase 8D结论：人工审核任务已完成，状态为`stop_at_acknowledged_qu
 实际修改文件：`src/knowledgehub/writing_rag/review.py`、`src/knowledgehub/writing_rag/pilot.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_quality_audit.py`、`tests/writing_material/test_extract_review.py`、本计划、审计补充、设计文档和pilot runbook。
 
 Phase 8E结论：人工质量审核和机器可追踪acknowledgement均已完成。当前没有强制的下一实施阶段；保持30篇pilot和现有production release，不因仅审核元数据变化重建相同material内容。未来若选择实际修复6项重复内容或其他finding，应以新的显式edit/reject决定进入新阶段。
+
+## Phase 9：终态状态对账（2026-07-19）
+
+1. [x] 重新扫描本计划，无未勾选工作项；扫描writing-material源码/测试，无TODO/FIXME/placeholder实现分支。
+2. [x] 将基线审计第1–15节明确标注为历史，不删除原始决策；更新第0节权威矩阵，消除WORKTREE_ONLY、生产134 points和未promotion等已过时“当前态”。
+3. [x] 对账Git：Phase 9开始时工作区干净，`main`领先`origin/main` 9 commits；本终态文档提交后为10 commits。记录为本地已提交但未push，不声称远端已合并。
+4. [x] 对账真实状态：current accepted source validation errors=[]/index eligible；audit-v2为36 acknowledged/0 unreviewed；磁盘alias state为quality-v2 active/1107。
+5. [x] Qdrant服务当前未监听6333，因此不新增live collection声明；未启动服务、未执行index/release，也未修改alias。
+6. [x] 将非Docling/OCR fail-closed、默认12类、单一OpenAI-compatible provider、run级timestamp和不回写raw review status继续列为明确设计边界，不机械实现为破坏兼容的迁移。
+
+Phase 9结论：此前“基于Zotero文献自动构建写作素材知识库”计划在当前30篇pilot范围内已完成，终态为`stop_at_acknowledged_quality_findings`。没有可在既有授权下继续自动执行的强制任务。未来扩量、修改已接受内容、push或新production release均属于新授权范围。
