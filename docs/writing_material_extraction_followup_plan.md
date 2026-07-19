@@ -2,7 +2,7 @@
 
 - 基线审计：`docs/writing_material_extraction_implementation_audit.md`
 - 原则：只列未完成或需修正工作；先 provenance/exact-span/schema/dry-run，再扩量；正式索引前必须有人审 gate
-- 当前状态：Phase 1–11全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。production alias实时为quality-v2 active/1107。用户保持30篇pilot、不扩量。质量finding已全部acknowledged；five-year retention active至2031-07-19、28/28 run paths private；rollback dry-run真实报告ready且零写入。当前无新的LLM、扩量、审核内容修改、索引或真实rollback授权。
+- 当前状态：Phase 1–12全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。production alias经真实可逆rollback演练后已恢复为quality-v2 active/1107。用户保持30篇pilot、不扩量。质量finding已全部acknowledged；five-year retention active至2031-07-19、28/28 run paths private。没有新的LLM、扩量、审核内容修改或索引重建；Phase 12唯一生产写入是两次显式授权的alias transaction。
 
 ## Phase 1：状态与 schema 安全收口（P0）
 
@@ -817,3 +817,17 @@ Phase 10结论：当前30篇pilot的保留期和本地访问权限已从approval
 实际修改文件：`src/knowledgehub/writing_rag/release.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_release.py`、`tests/writing_material/test_extract_review.py`、release runbook、设计文档、本计划与实施审计。
 
 Phase 11结论：当前production rollback的全部前置条件已通过真实只读验证；真正移动alias仍未执行，也不由“继续”自动授权。remaining warning仅为旧134-point previous collection早于writing-material专用release manifest，但其live collection和clone前snapshot均存在且一致。
+
+## Phase 12：生产 alias 真实可逆 rollback 演练（2026-07-19）
+
+1. [x] 在用户明确授权真实alias rollback后，重新执行只读readiness；仍为`ready=true`，fingerprint `33f4505b05b97d75d113d6d6abf718009f4d9b79b68817c6effbfb215b7adc3f`。
+2. [x] 第一次`release rollback --yes`于`2026-07-19T15:51:41.186457+00:00`将stable alias从quality-v2/1107切换到previous v1/134；alias-status读回与transaction state一致。
+3. [x] 切换后使用生产query `strategy for identifying a research gap`验证真实流量已到旧集合，Top-1返回0 hits；该观察是切换证据，不作为旧集合质量验收。
+4. [x] 第二次`release rollback --yes`于`2026-07-19T15:54:13.634353+00:00`通过同一机制恢复quality-v2/1107；current active/previous分别恢复为quality-v2/v1，release manifest与artifact fingerprint绑定保持有效。
+5. [x] 恢复后Qdrant读回green、optimizer ok、indexed vectors/points均为1107、update queue为0；相同生产query重新命中accepted-snapshot-only strategy且source join/provenance完整。
+6. [x] 没有创建或恢复snapshot、没有新collection、没有index/extraction、没有LLM请求、没有修改accepted/evidence/cache/Zotero；生产集合内容未改。实际状态写入严格限于两次授权的alias transaction及其时间戳，最终服务目标已恢复。
+7. [x] 既有rollback fixture定向回归`1 passed, 6 deselected`；`git diff --check`通过。本阶段只固化真实运行证据，没有修改rollback实现，因此不重复运行Phase 11已通过的549项全仓回归。
+
+实际修改文件：release runbook、设计文档、本计划与实施审计。Phase 12没有生产代码或测试代码变更。
+
+Phase 12结论：真实alias switch和同机制恢复均已外部验证，回滚能力不再停留在readiness推断。演练期间旧134-point集合不包含该质量检索目标，因此生产检索曾短暂返回0 hits；这也证明真实演练必须在维护窗口执行。最终active已恢复quality-v2/1107，未扩大pilot。

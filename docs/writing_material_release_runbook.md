@@ -50,6 +50,17 @@ knowledgehub writing-material release rollback --dry-run
 
 snapshot缺失只给warning，因为真实rollback首先切回仍存在的previous collection；alias漂移、collection缺失/schema漂移、point drift或manifest错误均返回`blocked`。`--dry-run`与`--yes`组合会被拒绝。
 
-2026-07-19真实只读演练返回`ready=true`、fingerprint `33f4505b05b97d75d113d6d6abf718009f4d9b79b68817c6effbfb215b7adc3f`：active quality-v2为1107 points，previous v1为134 points，二者green且schema一致；release manifest和原snapshot有效。唯一warning是previous collection早于writing-material release manifest。演练后alias/current/transaction均未变化，`rollback_performed=false`、`writes_performed=false`。
+2026-07-19真实只读演练返回`ready=true`、fingerprint `33f4505b05b97d75d113d6d6abf718009f4d9b79b68817c6effbfb215b7adc3f`：active quality-v2为1107 points，previous v1为134 points，二者green且schema一致；release manifest和原snapshot有效。唯一warning是previous collection早于writing-material release manifest。
 
-自动测试使用fake backend/client验证134+3=137 clone-and-merge、snapshot URI、ready与alias-drift blocked报告、CLI dry-run零写入及confirmation gates。真实演练只读取本机Qdrant和磁盘状态；没有创建snapshot、恢复collection或修改active/candidate/alias。
+## 真实可逆演练记录
+
+用户明确授权后，于2026-07-19执行了一次完整switch-and-restore：
+
+1. 再次运行`rollback --dry-run`并确认上述fingerprint和`ready=true`；
+2. `rollback --yes`于`15:51:41.186457+00:00`切到v1/134；立即读回alias-status，并用生产query确认流量已切换（该样例0 hits）；
+3. 再次运行`rollback --yes`于`15:54:13.634353+00:00`恢复quality-v2/1107；
+4. 读回alias、Qdrant collection和生产query：green、1107/1107、update queue 0，accepted-only命中与source join恢复。
+
+演练没有创建/恢复snapshot或写collection；唯一写入是两次alias transaction。旧集合会恢复旧数据质量，本次样例在约2分32秒的切换窗口无结果，因此真实操作必须安排维护窗口。建议把readiness报告、切换后health query、恢复后health query作为同一个操作记录保留；任一步与预期不符立即用同一rollback命令恢复，不能继续发布操作。
+
+自动测试使用fake backend/client验证134+3=137 clone-and-merge、snapshot URI、ready与alias-drift blocked报告、CLI dry-run零写入及confirmation gates。上述真实演练实际修改了alias transaction两次，最终恢复原active；没有创建snapshot、恢复collection或修改physical collection内容。
