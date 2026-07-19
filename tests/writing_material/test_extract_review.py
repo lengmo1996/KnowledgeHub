@@ -226,6 +226,12 @@ def test_release_and_pilot_cli_commands_keep_explicit_safety_inputs() -> None:
     )
     assert release.writing_material_release_command == "stage"
     assert release.yes is True
+    rollback = parser.parse_args(
+        ["writing-material", "release", "rollback", "--dry-run"]
+    )
+    assert rollback.writing_material_release_command == "rollback"
+    assert rollback.dry_run is True
+    assert rollback.yes is False
     pilot = parser.parse_args(
         [
             "writing-material",

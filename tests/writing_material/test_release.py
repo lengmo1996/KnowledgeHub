@@ -27,14 +27,28 @@ class FakeReleaseBackend:
                 "schema": {"dense": 1024, "sparse": "bm25"},
             }
         }
+        self.aliases: dict[str, str] = {}
+        self.snapshots: set[tuple[str, str]] = set()
         self.snapshot_calls = 0
 
     def inspect(self, collection):
         return self.collections.get(collection, {"exists": False})
 
+    def alias_target(self, alias):
+        return self.aliases.get(alias)
+
+    def snapshot_exists(self, collection, name):
+        return (collection, name) in self.snapshots
+
     def snapshot(self, collection):
         self.snapshot_calls += 1
-        return {"snapshot_id": "snapshot-1", "collection": collection}
+        self.snapshots.add((collection, "snapshot-1.snapshot"))
+        return {
+            "name": "snapshot-1.snapshot",
+            "collection": collection,
+            "points": self.collections[collection]["points"],
+            "schema": self.collections[collection]["schema"],
+        }
 
     def restore(self, snapshot, target_collection):
         assert snapshot["collection"] == "active-writing"
@@ -44,6 +58,7 @@ class FakeReleaseBackend:
 class FakePromotion:
     def __init__(self) -> None:
         self.last_release = None
+        self.rollback_calls = 0
 
     def stage(self, knowledge_base, candidate, *, verified_release):
         assert knowledge_base == "writing"
@@ -59,6 +74,7 @@ class FakePromotion:
     def rollback(self, knowledge_base, *, confirmed=False):
         if not confirmed:
             raise ValueError("confirmation required")
+        self.rollback_calls += 1
         return {"status": "rolled_back"}
 
 
@@ -77,6 +93,10 @@ class FakeQdrantClient:
             )
         }
         self.recoveries: list[tuple[str, str, str | None, bool]] = []
+        self.aliases = {"knowledgehub_writing_current": "active-writing"}
+        self.snapshots = {
+            "active-writing": [SimpleNamespace(name="snapshot-1.snapshot")]
+        }
         self.closed = False
 
     def collection_exists(self, collection: str) -> bool:
@@ -89,6 +109,17 @@ class FakeQdrantClient:
         assert collection == "active-writing"
         assert wait is True
         return SimpleNamespace(name="snapshot-1.snapshot", checksum="sha256:fixture")
+
+    def get_aliases(self):
+        return SimpleNamespace(
+            aliases=[
+                SimpleNamespace(alias_name=alias, collection_name=collection)
+                for alias, collection in self.aliases.items()
+            ]
+        )
+
+    def list_snapshots(self, collection: str):
+        return self.snapshots.get(collection, [])
 
     def recover_snapshot(
         self,
@@ -187,6 +218,66 @@ def test_release_clone_merge_validates_counts_and_never_promotes_during_build(tm
     assert service.rollback(confirmed=True)["status"] == "rolled_back"
 
 
+def test_release_rollback_dry_run_validates_live_state_without_writes(tmp_path) -> None:
+    review, run_id = _reviewed_run(tmp_path)
+    backend = FakeReleaseBackend()
+    promotion = FakePromotion()
+    service = WritingMaterialReleaseService(
+        review, backend, tmp_path / "releases", promotion=promotion
+    )
+
+    def merge(collection):
+        backend.collections[collection]["points"] += 3
+        return {"status": "success", "indexed": 3, "failures": []}
+
+    built = service.build(
+        run_id,
+        active_collection="active-writing",
+        candidate_collection="candidate-writing",
+        merge=merge,
+    )
+    backend.aliases["knowledgehub_writing_current"] = "candidate-writing"
+    promotion_status = {
+        "alias": "knowledgehub_writing_current",
+        "current": {
+            "status": "active",
+            "active_collection": "candidate-writing",
+            "previous_collection": "active-writing",
+            "candidate_points": 137,
+            "release_manifest": built["manifest_path"],
+            "previous_release_manifest": None,
+        },
+    }
+    snapshot_calls = backend.snapshot_calls
+    report = service.assess_rollback(promotion_status)
+    assert report["status"] == "ready"
+    assert report["ready"] is True
+    assert report["alias_target"] == "candidate-writing"
+    assert report["snapshot_available"] is True
+    assert report["expected_post_rollback"] == {
+        "alias_target": "active-writing",
+        "active_collection": "active-writing",
+        "previous_collection": "candidate-writing",
+    }
+    assert report["writes_performed"] is False
+    assert report["rollback_performed"] is False
+    assert report["errors"] == []
+    assert backend.snapshot_calls == snapshot_calls
+    assert promotion.rollback_calls == 0
+
+    backend.aliases["knowledgehub_writing_current"] = "active-writing"
+    blocked = service.assess_rollback(promotion_status)
+    assert blocked["status"] == "blocked"
+    assert blocked["ready"] is False
+    assert "live alias target differs" in " ".join(blocked["errors"])
+
+    backend.aliases["knowledgehub_writing_current"] = "candidate-writing"
+    backend.collections["active-writing"]["schema"] = {"dense": 768, "sparse": "bm25"}
+    schema_drift = service.assess_rollback(promotion_status)
+    assert schema_drift["status"] == "blocked"
+    assert "collection schemas differ" in " ".join(schema_drift["errors"])
+
+
 def test_release_rejects_merge_count_or_schema_drift(tmp_path) -> None:
     review, run_id = _reviewed_run(tmp_path)
     backend = FakeReleaseBackend()
@@ -220,6 +311,8 @@ def test_qdrant_release_backend_inspects_snapshots_and_restores_clone() -> None:
         },
     }
     assert backend.inspect("candidate-writing") == {"exists": False}
+    assert backend.alias_target("knowledgehub_writing_current") == "active-writing"
+    assert backend.snapshot_exists("active-writing", "snapshot-1.snapshot") is True
     snapshot = backend.snapshot("active-writing")
     backend.restore(snapshot, "candidate-writing")
     assert client.recoveries == [
@@ -296,6 +389,19 @@ def test_release_cli_dry_run_is_read_only(tmp_path, monkeypatch) -> None:
     assert client.closed is True
     assert not (tmp_path / "materials" / "releases").exists()
     assert not (tmp_path / "materials" / "release-candidates").exists()
+
+    client.closed = False
+    with pytest.raises(ValueError, match="cannot be combined"):
+        _run_release_command(
+            Namespace(
+                writing_material_release_command="rollback",
+                dry_run=True,
+                yes=True,
+            ),
+            config,
+            review,
+        )
+    assert client.closed is True
 
 
 def test_release_rejects_stable_alias_as_active_snapshot_source(tmp_path) -> None:

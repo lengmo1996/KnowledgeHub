@@ -119,6 +119,7 @@ def add_writing_material_parser(subparsers: Any) -> None:
     promote.add_argument("--yes", action="store_true")
     rollback = release_commands.add_parser("rollback")
     rollback.add_argument("--yes", action="store_true")
+    rollback.add_argument("--dry-run", action="store_true")
 
     pilot = commands.add_parser("pilot")
     pilot_commands = pilot.add_subparsers(dest="writing_material_pilot_command", required=True)
@@ -628,6 +629,10 @@ def _run_release_command(
             return service.stage(args.manifest, confirmed=args.yes)
         if command == "promote":
             return service.promote(active_physical, confirmed=args.yes)
+        if args.dry_run:
+            if args.yes:
+                raise ValueError("rollback --dry-run cannot be combined with --yes")
+            return service.assess_rollback(promotion_status)
         return service.rollback(confirmed=args.yes)
     finally:
         client.close()

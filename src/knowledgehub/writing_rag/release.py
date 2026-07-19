@@ -20,6 +20,10 @@ _SNAPSHOT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,255}\Z")
 class ReleaseBackend(Protocol):
     def inspect(self, collection: str) -> Mapping[str, Any]: ...
 
+    def alias_target(self, alias: str) -> str | None: ...
+
+    def snapshot_exists(self, collection: str, name: str) -> bool: ...
+
     def snapshot(self, collection: str) -> Mapping[str, Any]: ...
 
     def restore(self, snapshot: Mapping[str, Any], target_collection: str) -> None: ...
@@ -66,6 +70,24 @@ class QdrantReleaseBackend:
             "points": int(getattr(info, "points_count", 0) or 0),
             "schema": schema,
         }
+
+    def alias_target(self, alias: str) -> str | None:
+        aliases = getattr(self.client.get_aliases(), "aliases", ())
+        matches = {
+            str(getattr(value, "collection_name", ""))
+            for value in aliases
+            if getattr(value, "alias_name", None) == alias
+        }
+        matches.discard("")
+        if len(matches) > 1:
+            raise ValueError("Qdrant alias has multiple targets")
+        return next(iter(matches), None)
+
+    def snapshot_exists(self, collection: str, name: str) -> bool:
+        if not _COLLECTION.fullmatch(collection) or not _SNAPSHOT.fullmatch(name):
+            raise ValueError("snapshot identity is invalid")
+        snapshots = self.client.list_snapshots(collection)
+        return any(str(getattr(value, "name", "")) == name for value in snapshots)
 
     def snapshot(self, collection: str) -> Mapping[str, Any]:
         before = self.inspect(collection)
@@ -246,6 +268,123 @@ class WritingMaterialReleaseService:
         if self.promotion is None:
             raise RuntimeError("promotion backend is unavailable")
         return dict(self.promotion.rollback("writing", confirmed=confirmed))
+
+    def assess_rollback(self, promotion_status: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate rollback inputs without switching aliases or restoring snapshots."""
+
+        errors: list[str] = []
+        warnings: list[str] = []
+        current_value = promotion_status.get("current")
+        current = dict(current_value) if isinstance(current_value, Mapping) else {}
+        alias = str(promotion_status.get("alias") or "")
+        active = str(current.get("active_collection") or "")
+        previous = str(current.get("previous_collection") or "")
+        if current.get("status") != "active":
+            errors.append("current promotion state is not active")
+        if alias != "knowledgehub_writing_current":
+            errors.append("writing alias identity is invalid")
+        if (
+            not _COLLECTION.fullmatch(active)
+            or not _COLLECTION.fullmatch(previous)
+            or active == previous
+            or alias in {active, previous}
+        ):
+            errors.append("rollback collections are missing, unsafe, or not distinct")
+
+        active_info: dict[str, Any] = {"exists": False}
+        previous_info: dict[str, Any] = {"exists": False}
+        if _COLLECTION.fullmatch(active):
+            try:
+                active_info = dict(self.backend.inspect(active))
+                self._validate_collection(active_info, expected_exists=True, label="active")
+            except Exception as exc:
+                errors.append(f"active collection validation failed: {exc}")
+        if _COLLECTION.fullmatch(previous):
+            try:
+                previous_info = dict(self.backend.inspect(previous))
+                self._validate_collection(previous_info, expected_exists=True, label="previous")
+            except Exception as exc:
+                errors.append(f"previous collection validation failed: {exc}")
+        if active_info.get("exists") and previous_info.get("exists"):
+            if active_info.get("schema") != previous_info.get("schema"):
+                errors.append("active and previous collection schemas differ")
+            candidate_points = current.get("candidate_points")
+            if not isinstance(candidate_points, int) or candidate_points != active_info.get(
+                "points"
+            ):
+                errors.append("active point count differs from promotion state")
+
+        alias_target: str | None = None
+        if alias:
+            try:
+                alias_target = self.backend.alias_target(alias)
+            except Exception as exc:
+                errors.append(f"alias target validation failed: {exc}")
+        if alias_target != active:
+            errors.append("live alias target differs from promotion state")
+
+        release_manifest_path = str(current.get("release_manifest") or "")
+        snapshot_available: bool | None = None
+        snapshot_identity: dict[str, str] | None = None
+        if not release_manifest_path:
+            errors.append("active release manifest is missing")
+        else:
+            try:
+                path = Path(release_manifest_path).resolve()
+                release_boundary = (self.release_root / "writing").resolve()
+                if not path.is_relative_to(release_boundary):
+                    raise ValueError("active release manifest is outside the release root")
+                manifest = self._verified_manifest(path)
+                if manifest.get("candidate_collection") != active:
+                    errors.append("active release manifest collection differs from promotion state")
+                snapshot = manifest.get("snapshot")
+                if not isinstance(snapshot, Mapping):
+                    warnings.append("active release manifest has no rollback snapshot record")
+                else:
+                    source = str(snapshot.get("collection") or "")
+                    name = str(snapshot.get("name") or "")
+                    if source != previous or not _SNAPSHOT.fullmatch(name):
+                        errors.append("rollback snapshot identity differs from previous collection")
+                    else:
+                        snapshot_identity = {"collection": source, "name": name}
+                        snapshot_available = self.backend.snapshot_exists(source, name)
+                        if not snapshot_available:
+                            warnings.append(
+                                "rollback snapshot is unavailable; previous collection remains primary"
+                            )
+            except Exception as exc:
+                errors.append(f"active release manifest validation failed: {exc}")
+
+        if not current.get("previous_release_manifest"):
+            warnings.append("previous collection predates a tracked writing-material release manifest")
+        report = {
+            "schema_name": "writing_material_rollback_readiness",
+            "schema_version": "writing-material-rollback-readiness-v1",
+            "status": "ready" if not errors else "blocked",
+            "ready": not errors,
+            "knowledge_base": "writing",
+            "alias": alias,
+            "alias_target": alias_target,
+            "active_collection": active,
+            "previous_collection": previous,
+            "active": active_info,
+            "previous": previous_info,
+            "release_manifest": release_manifest_path or None,
+            "snapshot": snapshot_identity,
+            "snapshot_available": snapshot_available,
+            "expected_post_rollback": {
+                "alias_target": previous,
+                "active_collection": previous,
+                "previous_collection": active,
+            },
+            "errors": errors,
+            "warnings": warnings,
+            "dry_run": True,
+            "writes_performed": False,
+            "rollback_performed": False,
+        }
+        report["artifact_fingerprint"] = sha256_json(report)
+        return report
 
     @staticmethod
     def _validate_collection(

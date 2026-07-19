@@ -29,7 +29,27 @@
 - `stage(manifest, confirmed=True)` 再次验证 manifest fingerprint 后才调用仓库现有 promotion backend；
 - `promote(fallback, confirmed=True)` 才允许移动 `knowledgehub_writing_current` alias；
 - `rollback(confirmed=True)` 使用现有 alias transaction 回到 previous collection；
+- `rollback --dry-run`只读验证磁盘promotion state、live alias、active/previous collection、point/schema、release manifest和snapshot availability，绝不调用alias switch或snapshot restore；
 - 未显式确认时三个操作都拒绝；
 - promotion 前应另行创建 active snapshot，并保留 candidate manifest、accepted manifest hash 和 point-count 报告。
 
-自动测试只用 fake backend/client 验证 134 + 3 = 137 的 clone-and-merge、snapshot URI、CLI dry-run 零写入和 confirmation gates。实现过程中没有连接本机 Qdrant、创建真实 snapshot 或修改 active/candidate/alias。
+## Rollback readiness
+
+```bash
+knowledgehub writing-material release rollback --dry-run
+```
+
+`writing-material-rollback-readiness-v1`只有在以下条件全部成立时返回`ready=true`：
+
+- current promotion state为active，active/previous均为安全、不同的物理collection；
+- live `knowledgehub_writing_current`实际指向current active；
+- 两个collection均green、points有效且dense/sparse schema相同；
+- active points与promotion state一致；
+- active release manifest位于writing-material release root、fingerprint有效且绑定current active；
+- manifest中的snapshot绑定previous collection，并报告Qdrant中是否仍可用。
+
+snapshot缺失只给warning，因为真实rollback首先切回仍存在的previous collection；alias漂移、collection缺失/schema漂移、point drift或manifest错误均返回`blocked`。`--dry-run`与`--yes`组合会被拒绝。
+
+2026-07-19真实只读演练返回`ready=true`、fingerprint `33f4505b05b97d75d113d6d6abf718009f4d9b79b68817c6effbfb215b7adc3f`：active quality-v2为1107 points，previous v1为134 points，二者green且schema一致；release manifest和原snapshot有效。唯一warning是previous collection早于writing-material release manifest。演练后alias/current/transaction均未变化，`rollback_performed=false`、`writes_performed=false`。
+
+自动测试使用fake backend/client验证134+3=137 clone-and-merge、snapshot URI、ready与alias-drift blocked报告、CLI dry-run零写入及confirmation gates。真实演练只读取本机Qdrant和磁盘状态；没有创建snapshot、恢复collection或修改active/candidate/alias。

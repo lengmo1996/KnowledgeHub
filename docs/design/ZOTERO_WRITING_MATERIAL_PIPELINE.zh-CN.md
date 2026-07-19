@@ -367,6 +367,7 @@ knowledgehub writing-material extract --retry-failed --run-id <prior-run-id>
 knowledgehub writing-material review render --run-id <run-id>
 knowledgehub writing-material review apply --run-id <run-id> --decisions decisions.jsonl
 knowledgehub writing-material validate --run-id <run-id>
+knowledgehub writing-material release rollback --dry-run
 knowledgehub writing-material index --run-id <run-id> \
   --accepted-only --candidate-collection <new-physical-name> --dry-run
 knowledgehub writing-material pilot assess-dry-run --report <dry-run.json>
@@ -441,7 +442,7 @@ Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖
 - 当前30篇run使用classification-v9/abstraction-v7完成30/30、0失败，严格schema真实provider路径通过；
 - 当前run governance为active至2031-07-19，28/28路径满足private filesystem permissions。
 
-仍保留的边界：Docling `prov.charspan`不能外推到selection之外的全部论文、OCR和跨页自然段；非Docling/PyMuPDF fallback继续fail closed；`local reviewer only`没有独立RBAC身份层；生产rollback已实现并经fixture测试，但未执行真实切换演练。
+仍保留的边界：Docling `prov.charspan`不能外推到selection之外的全部论文、OCR和跨页自然段；非Docling/PyMuPDF fallback继续fail closed；`local reviewer only`没有独立RBAC身份层；生产rollback已完成真实只读readiness演练，但没有执行alias真实切换。
 
 ## 17. 修改和新增文件
 
