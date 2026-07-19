@@ -101,6 +101,7 @@ class ChunkRecord:
     text_sha256: str
     chunk_fingerprint: str
     token_count: int
+    sparse_text: str | None = None
     page_start: int | None = None
     page_end: int | None = None
     section_path: tuple[str, ...] = ()
@@ -117,6 +118,7 @@ class ChunkRecord:
             "page_end": self.page_end,
             "page_start": self.page_start,
             "section_path": list(self.section_path),
+            "sparse_text": self.sparse_text,
             "text": self.text,
             "text_sha256": self.text_sha256,
             "token_count": self.token_count,

@@ -493,6 +493,24 @@ def detect_language(text: str) -> str:
     return "en" if latin else "und"
 
 
+_ASSET_TYPE_INTENT_PATTERNS = {
+    "strategy": re.compile(r"\bstrateg(?:y|ies)\b|写作策略|策略", re.I),
+    "template": re.compile(r"\btemplates?\b|写作模板|模板", re.I),
+    "phrase": re.compile(r"\bphrases?\b|表达短语|短语", re.I),
+}
+
+
+def infer_writing_asset_type(query: str) -> str | None:
+    """Return a type only when the query has one unambiguous material intent."""
+
+    matches = [
+        asset_type
+        for asset_type, pattern in _ASSET_TYPE_INTENT_PATTERNS.items()
+        if pattern.search(query)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def detect_risk_flags(text: str, category: str) -> tuple[str, ...]:
     flags: set[str] = set()
     if _SUPERLATIVE.search(text):

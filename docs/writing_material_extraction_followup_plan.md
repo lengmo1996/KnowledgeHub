@@ -657,3 +657,28 @@ Phase 1 已采用以下保守默认并保留决策历史：
 4. [已决定，保守默认] 不自动提交、迁移、删除或覆盖当前临时 selection/decision/report；未来 pilot 报告只在显式 `--output` 下以 0600 写入批准的受控目录；已有用户 artifacts 保持原状。
 5. [已决定，实施默认] 正式路径采用 clone 当前 Writing physical release 后增量合并 accepted materials；不以 scoped pilot collection 替换 active。真实 stage/promotion 仍需独立确认。
 6. [已决定，2026-07-19] 保持当前30篇 validated pilot，不扩量；保留隔离candidate但不stage/promotion。未来扩量必须以新的中文范围重新进入selection + dry-run审批。
+
+## Phase 7：检索 miss 修复与生产发布（2026-07-19）
+
+本阶段由用户在 pilot 决策完成后另行明确授权，不改变“不扩量”决定，不重新执行 extraction，也不调用 LLM。发布继续遵循 Phase 5 的 clone-and-merge contract，不用 scoped 973-point candidate 覆盖已有 134-point Writing active。
+
+### Phase 7A：两条检索 miss 质量闭环
+
+1. [x] 建立 Git 实现基线：commit `2173303`（`feat: add Zotero writing material pipeline`）；本地 `papers.jsonl`、临时 decisions 与含原文 review sample 按 local-reviewer policy 排除。
+2. [x] 复现中文 query 与目标模板 sparse term 交集为 0；实现保留原文 token 的 deterministic CJK bigram 扩展，并将 sparse preprocessing version 纳入增量 fingerprint。
+3. [x] 为 Chunk 增加不污染 dense/display text 的 `sparse_text`，writing-material index processor 升级至 `writing-material-index-v4`；加入可追踪的 asset type/category sparse aliases。
+4. [x] 对仅含一个明确 `template/strategy/phrase`（含中文同义词）意图的 query 增加 deterministic `asset_type` filter；含糊 query 不过滤，规则不读取 expected asset ID。
+5. [x] 构建新的 accepted-only 隔离 candidate `knowledgehub_writing_material_candidate_20260719_f99463512f16_quality_v2`：973/973、green、source verified、promotion=false，fingerprint `320d00b14aa94c6aa0844027404ee39bddde621de241e329c3892687535adbe6`。
+6. [x] 使用未修改的原8条 gold cases 重跑 sparse retrieval：两条旧 miss 均变为目标 Top-1，Recall@5=1.0、MRR=1.0、source join=1.0、duplicate=0；报告 fingerprint `799d2909015bbc9439c32934044975a1c9489abc6c37862371101a4b003bc797`。
+7. [x] 全仓 pytest 534 passed、Ruff、mypy 129 source files与`git diff --check`通过；质量改进待本阶段紧接提交。
+
+实际修改文件：`src/knowledgehub/indexing/sparse.py`、`src/knowledgehub/indexing/incremental.py`、`src/knowledgehub/pipeline/models.py`、`src/knowledgehub/retrieval/models.py`、`src/knowledgehub/retrieval/service.py`、`src/knowledgehub/hub/query.py`、`src/knowledgehub/cli/writing_material.py`、`src/knowledgehub/writing_rag/materials.py`、`src/knowledgehub/writing_rag/review.py` 及对应 tests。
+
+### Phase 7B：clone-and-merge stage/promotion
+
+1. [ ] 只读确认 active physical collection、stable alias、promotion state、134-point 基线与 rollback fallback。
+2. [ ] release build dry-run 验证 `134 + 973 = 1107`，且 candidate 为新的物理 collection。
+3. [ ] 创建 active snapshot，恢复到 release candidate，合并 accepted assets并验证1107 points、dense/sparse schema与source join。
+4. [ ] 使用带 fingerprint 的 `writing-material-release-v1` manifest 执行显式 stage。
+5. [ ] promotion 前复验 active snapshot/fallback 与 candidate manifest，再显式 promote stable alias。
+6. [ ] promotion 后验证 alias、active point count、8-case retrieval/source join；保留 rollback 信息，不删除旧 active、隔离 candidates、snapshot、manifest或缓存。

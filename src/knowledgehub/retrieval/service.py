@@ -415,6 +415,8 @@ class RetrievalService:
             raise ValueError("query mode must be dense, hybrid, or sparse")
         if request.fallback_policy not in {"strict", "degrade"}:
             raise ValueError("fallback policy must be strict or degrade")
+        if request.writing_asset_type not in {None, "strategy", "template", "phrase"}:
+            raise ValueError("writing_asset_type must be strategy, template, or phrase")
         if not 1 <= request.limit <= 100 or request.prefetch_limit < request.limit:
             raise ValueError("invalid result or prefetch limit")
         if (
@@ -494,6 +496,7 @@ def _build_filter(request: SearchRequest) -> Any:
         ("symbol", request.symbol),
         ("section", request.section),
         ("writing_function", request.writing_function),
+        ("asset_type", request.writing_asset_type),
         ("research_domain", request.research_domain),
         ("venue", request.venue),
         ("expression_strength", request.expression_strength),

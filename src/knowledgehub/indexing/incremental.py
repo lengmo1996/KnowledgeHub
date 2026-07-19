@@ -13,7 +13,7 @@ from knowledgehub.core.hashing import sha256_json
 from knowledgehub.core.models import KnowledgeDocument
 from knowledgehub.embeddings.endpoint_pool import EndpointPool
 from knowledgehub.indexing.qdrant import QdrantIndex
-from knowledgehub.indexing.sparse import SparseEncoder
+from knowledgehub.indexing.sparse import SPARSE_PREPROCESSING_VERSION, SparseEncoder
 from knowledgehub.pipeline.config import RagConfig
 from knowledgehub.pipeline.models import ChunkRecord
 
@@ -205,6 +205,7 @@ class IncrementalChunkIndexer:
                 "revision": self.config.embedding_revision,
                 "dimension": self.config.embedding_dim,
                 "sparse": self.config.sparse_model,
+                "sparse_preprocessing": SPARSE_PREPROCESSING_VERSION,
             }
         )
         planned: list[tuple[IndexInput, str]] = []
@@ -247,11 +248,12 @@ class IncrementalChunkIndexer:
             try:
                 chunks = value.chunks
                 texts = [chunk.text for chunk in chunks]
+                sparse_texts = [chunk.sparse_text or chunk.text for chunk in chunks]
                 dense: list[Sequence[float]] = []
                 for offset in range(0, len(texts), self.config.embedding_batch_size):
                     result = pool.embed(texts[offset : offset + self.config.embedding_batch_size])
                     dense.extend(result.vectors)
-                sparse = sparse_encoder.encode(texts)
+                sparse = sparse_encoder.encode(sparse_texts)
                 atomic_write_jsonl(
                     self.data_dir / "chunks" / f"{sha256_json(value.document.document_id)[:32]}.jsonl",
                     [chunk.to_dict() for chunk in chunks],

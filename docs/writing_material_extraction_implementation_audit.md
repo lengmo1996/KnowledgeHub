@@ -5,7 +5,7 @@
 - 审计性质：实现状态、验证和后续范围审计；未修改生产代码、缓存、状态或索引
 - 状态口径：`IMPLEMENTED`、`PARTIAL`、`PLACEHOLDER`、`DOCUMENTED_ONLY`、`NOT_IMPLEMENTED`、`DIVERGED`、`BLOCKED`、`UNKNOWN`
 
-> 后续实施注记（2026-07-19）：本文以下矩阵保留为实施前基线，不回写历史结论。当前30篇 correction-v2 extraction为30/30、0失败；reviewer `lengmo`明确授权2496项全部accepted，complete accepted-v2为pending=0。隔离candidate `knowledgehub_writing_material_candidate_20260719_f99463512f16` accepted-only写入973/973，生产Writing保持134 points；8条sparse retrieval/source-join得到recall@5/MRR=0.75、join=1.0、duplicate=0，最终全部pilot gates通过并返回`eligible_for_manual_expansion_decision`。用户随后明确决定保持当前pilot、不扩量；未promotion，生产collection/alias与Zotero未修改。
+> 后续实施注记（2026-07-19）：本文以下矩阵保留为实施前基线，不回写历史结论。当前30篇 correction-v2 extraction为30/30、0失败；reviewer `lengmo`明确授权2496项全部accepted，complete accepted-v2为pending=0。初始隔离candidate accepted-only写入973/973；其8条sparse retrieval有2条miss。后续明确授权的Phase 7A以CJK bigram与显式asset-type intent修复两条miss，新隔离candidate仍为973/973，原gold cases达到recall@5/MRR/source-join=1.0、duplicate=0。用户保持当前pilot、不扩量；截至本注记仍未promotion，生产Writing保持134 points。
 
 ## 0. 当前态完成性矩阵（2026-07-18）
 
@@ -21,7 +21,7 @@
 | new/changed/failed/retry/resume、checkpoint 与 cache invalidation | `INTERNAL_VERIFIED` | `ExtractionState`、checkpoint hash、resume/source tamper rejection、changed/parser/prompt/model/taxonomy/retry-refresh tests |
 | dry-run、mock provider、approval/preflight、零写入 | `INTERNAL_VERIFIED` | deterministic fixture、30-doc mock pilot、CLI TaskStore 前 authorization、network-free preflight；当前30篇 v6/v4 dry-run/gate/preflight |
 | review render/import、pending/accepted/edited/rejected、complete snapshot | `EXTERNAL_VERIFIED` | run `20260719T064746Z-f99463512f16` 已导入2496条reviewer授权的accepted decision；complete accepted-v2为pending=0、dependency exclusion=0且重读/source validation通过 |
-| accepted-only isolated candidate、retrieval/source-join gate | `EXTERNAL_VERIFIED` | 新隔离candidate 973/973、fingerprint有效、production仍134；8-case sparse report recall/MRR=0.75、source-join=1.0、duplicate=0，最终gate通过且promotion=false |
+| accepted-only isolated candidate、retrieval/source-join gate | `EXTERNAL_VERIFIED` | quality-v2隔离candidate 973/973、fingerprint有效；原8-case sparse report recall/MRR/source-join=1.0、duplicate=0，两条历史miss均为目标Top-1，promotion=false |
 | clone-and-merge release、stage/promotion/rollback | `INTERNAL_VERIFIED`（实现）/ `EXTERNAL_PENDING`（任何发布） | release count/schema/snapshot/alias/confirmation/dry-run tests；本轮未访问或修改生产 collection/alias |
 | 去重、language-scoped clustering、质量与风险评分 | `INTERNAL_VERIFIED` | deterministic cluster/quality/risk source tests；provider重复 payload 已 fail-closed |
 | 30篇当前 contract 真实 extraction | `EXTERNAL_VERIFIED` | correction-v2 run `20260719T064746Z-f99463512f16`完成30/30、0失败；1523/280/423/270资产严格重读且`source_verified=true`，旧duplicate回归样本通过 |
@@ -29,7 +29,7 @@
 | 是否扩量 | `EXTERNAL_VERIFIED`（决定） | 用户于2026-07-19明确选择`保持当前 pilot，不扩量`；结果为`stop_at_validated_pilot`，不创建新selection、不继续extraction且不授权promotion |
 | Git 实施历史 | `WORKTREE_ONLY` | 当前相关代码、配置、测试和文档仍为未提交工作；未获得提交/发布授权，不把工作区通过等同于已合并发布 |
 
-当前计划范围已经完成：Phase 1–5与Phase 6工作项1–8有实现、测试和适用运行工件证据，工作项9已有用户明确决定。最终状态为`stop_at_validated_pilot`；语言分布en=2470、zh=23、und=3，且8条用例有2条top-5 miss，当前77篇候选目录又只有2篇中文，其中一篇缺可靠provenance。权威证据支持保留当前pilot，不支持自动扩量、生产索引写入或promotion；后两者不是本决定授权的后续动作。
+Phase 1–6已经完成，最终扩量状态仍为`stop_at_validated_pilot`。后续另行授权的Phase 7A已将原8条检索用例提升为全部Top-1；语言分布仍为en=2470、zh=23、und=3，当前77篇候选目录仍只有2篇中文，其中一篇缺可靠provenance，因此质量修复不改变“不扩量”结论。生产stage/promotion已获得新的显式授权，必须继续按Phase 7B clone-and-merge门执行，不能把973-point scoped candidate直接替换134-point active。
 
 ## 1. 结论摘要
 

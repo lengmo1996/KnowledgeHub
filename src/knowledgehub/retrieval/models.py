@@ -34,6 +34,7 @@ class SearchRequest:
     symbol: str | None = None
     section: str | None = None
     writing_function: str | None = None
+    writing_asset_type: str | None = None
     research_domain: str | None = None
     venue: str | None = None
     expression_strength: str | None = None

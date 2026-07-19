@@ -65,6 +65,7 @@ def test_writing_filter_combines_style_and_numeric_facets() -> None:
             source=None,
             section="Introduction",
             writing_function="research_gap",
+            writing_asset_type="template",
             research_domain="vision",
             venue="NeurIPS",
             expression_strength="cautious",
@@ -79,6 +80,7 @@ def test_writing_filter_combines_style_and_numeric_facets() -> None:
     assert conditions["paragraph_word_count"].range.gte == 60
     assert conditions["paragraph_word_count"].range.lte == 180
     assert conditions["contains_math"].match.value is False
+    assert conditions["asset_type"].match.value == "template"
 
 
 def test_search_api_requires_bearer_key(tmp_path) -> None:

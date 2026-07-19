@@ -11,6 +11,7 @@ from knowledgehub.writing_rag.materials import (
     ClassificationItem,
     MaterialValidationError,
     ProposedSpan,
+    infer_writing_asset_type,
     parse_abstraction_response,
     parse_classification_response,
     resolve_sentence_selection,
@@ -43,6 +44,13 @@ def _classification_decision(
         else {flag: False for flag in RISK_FLAGS},
         "confidence": confidence,
     }
+
+
+def test_writing_asset_type_intent_requires_one_explicit_type() -> None:
+    assert infer_writing_asset_type("template for a theoretical contribution") == "template"
+    assert infer_writing_asset_type("用于问题陈述的写作策略") == "strategy"
+    assert infer_writing_asset_type("a phrase and template") is None
+    assert infer_writing_asset_type("explain the research problem") is None
 
 
 def test_closed_schema_and_exact_span_gate(tmp_path) -> None:

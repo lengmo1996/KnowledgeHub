@@ -127,6 +127,9 @@ def _retrieval_fixture(review, run_id: str, candidate_report: dict, *, query_cou
         (accepted_dir / "strategies.jsonl").read_text(encoding="utf-8").splitlines()[0]
     )
     index_input = _index_input("strategy", strategy, evidences)
+    assert index_input.chunks[0].sparse_text is not None
+    assert "material type: strategy" in index_input.chunks[0].sparse_text
+    assert "material type:" not in index_input.chunks[0].text
     payload = {
         **dict(index_input.chunks[0].metadata),
         "document_id": strategy["strategy_id"],
@@ -609,6 +612,7 @@ def test_pilot_retrieval_cli_composition_is_read_only_and_defaults_to_sparse(
     assert result["status"] == "success"
     assert len(service.requests) == 5
     assert all(request.mode == "sparse" for request in service.requests)
+    assert all(request.writing_asset_type is None for request in service.requests)
     assert service.endpoint_pool.closed is True
     assert result["writes_performed"] is False
     assert "original_text" not in json.dumps(result)

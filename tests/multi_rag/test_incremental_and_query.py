@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,7 +28,11 @@ class Pool:
 
 
 class Sparse:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
     def encode(self, texts):  # type: ignore[no-untyped-def]
+        self.texts.extend(texts)
         return [([1], [1.0]) for _ in texts]
 
 
@@ -112,6 +117,26 @@ def test_candidate_index_requires_a_new_collection_only_on_first_build(
     service.build([_input("doc-1")], knowledge_base="code")
     service.build([_input("doc-2")], knowledge_base="code")
     assert index.ensure_modes == [True, False]
+
+
+def test_incremental_index_uses_sparse_text_without_changing_dense_text(tmp_path: Path) -> None:
+    value = _input("doc-sparse")
+    chunk = replace(value.chunks[0], sparse_text="lexical aliases")
+    pool, sparse, index = Pool(), Sparse(), Index()
+    service = IncrementalChunkIndexer(
+        RagConfig(data_dir=tmp_path, gpu_mode="cpu", embedding_dim=2),
+        endpoint_pool=pool,
+        sparse_encoder=sparse,
+        index=index,
+    )
+
+    result = service.build(
+        [replace(value, chunks=(chunk,))],
+        knowledge_base="code",
+    )
+
+    assert result.status == "success"
+    assert sparse.texts == ["lexical aliases"]
 
 
 def test_code_intent_and_query_priority() -> None:
@@ -270,6 +295,45 @@ def test_writing_feedback_changes_subsequent_ranking(tmp_path: Path) -> None:
     assert response.hits[0].payload["writing_id"] == "writing:w2"
     assert response.hits[0].payload["feedback_adjustment"] == 0.1
     assert response.hits[0].payload["adjusted_quality_score"] == 0.7
+
+
+def test_writing_query_infers_one_explicit_material_asset_type(tmp_path: Path) -> None:
+    observed = SimpleNamespace(asset_type=None)
+
+    class Service:
+        endpoint_pool = SimpleNamespace(close=lambda: None)
+        reranker = None
+
+        def search(self, request):  # type: ignore[no-untyped-def]
+            observed.asset_type = request.writing_asset_type
+            return SearchResponse(
+                query=request.query,
+                mode="sparse",
+                collection="writing",
+                embedding_model="m",
+                embedding_revision="r",
+                embedding_dimension=2,
+                reranker_profile="off",
+                reranker_model=None,
+                reranker_revision=None,
+                reranker_fallback=None,
+                hits=(),
+                timings={},
+            )
+
+    config = SimpleNamespace(
+        rag_config=lambda _kb: RagConfig(data_dir=tmp_path, gpu_mode="cpu", embedding_dim=2),
+        writing=SimpleNamespace(data_root=tmp_path),
+    )
+    HubQueryService(config, service_factory=lambda _: Service()).search(
+        HubQueryRequest(
+            knowledge_base="writing",
+            query="template for theoretical contributions",
+            mode="sparse",
+        )
+    )
+
+    assert observed.asset_type == "template"
 
 
 def test_writing_section_filter_normalizes_legacy_headings(tmp_path: Path) -> None:

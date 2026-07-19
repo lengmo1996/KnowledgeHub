@@ -28,7 +28,7 @@ from knowledgehub.writing_rag.provenance import ProvenanceDocumentReader, Proven
 REVIEW_SCHEMA_VERSION = "writing-material-review-v1"
 REVIEW_STATUS_SCHEMA_VERSION = "writing-material-review-status-v1"
 ACCEPTED_SCHEMA_VERSION = "writing-material-accepted-v2"
-INDEX_PROCESSOR_VERSION = "writing-material-index-v2"
+INDEX_PROCESSOR_VERSION = "writing-material-index-v4"
 CANDIDATE_SCHEMA_VERSION = "writing-material-candidate-v1"
 _INDEX_CHUNK_NAMESPACE = uuid.UUID("f67b77bb-f6fc-56e6-9c37-620f3223bbb1")
 _DECISIONS = {"accepted", "edited", "rejected"}
@@ -962,6 +962,15 @@ def _index_input(
             ]
         )
         title = str(asset["text"])
+    sparse_text = "\n".join(
+        [
+            text,
+            f"material type: {asset_type}",
+            f"retrieval intent: {asset_type} writing {asset_type} {asset_type} {asset_type}",
+            f"writing category: {str(asset['category']).replace('_', ' ')}",
+            f"language: {asset['language']}",
+        ]
+    )
     content_hash = sha256_text(text)
     provenance = [
         {
@@ -1014,6 +1023,7 @@ def _index_input(
             {"content": content_hash, "metadata": metadata, "processor": INDEX_PROCESSOR_VERSION}
         ),
         token_count=max(1, len(re.findall(r"[A-Za-z0-9-]+|[\u3400-\u4dbf\u4e00-\u9fff]", text))),
+        sparse_text=sparse_text,
         page_start=min(int(value["page_start"]) for value in references),
         page_end=max(int(value["page_end"]) for value in references),
         section_path=(str(asset["category"]), asset_type),

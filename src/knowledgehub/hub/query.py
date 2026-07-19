@@ -185,6 +185,12 @@ class HubQueryService:
             for key in ("section", "venue", "research_domain"):
                 if filters.get(key) is not None:
                     writing_post_filters[key] = filters.pop(key)
+            if filters.get("writing_asset_type") is None:
+                from knowledgehub.writing_rag.materials import infer_writing_asset_type
+
+                inferred_asset_type = infer_writing_asset_type(value.query)
+                if inferred_asset_type is not None:
+                    filters["writing_asset_type"] = inferred_asset_type
         intent = (
             classify_code_intent(value.query, value.intent)
             if value.knowledge_base == "code"

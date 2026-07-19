@@ -15,6 +15,7 @@ from knowledgehub.governance.validation import HubValidator
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.indexing.incremental import IncrementalChunkIndexer
 from knowledgehub.writing_rag.extract import WritingMaterialExtractionService
+from knowledgehub.writing_rag.materials import infer_writing_asset_type
 from knowledgehub.writing_rag.pilot import (
     CandidateRetrievalEvaluator,
     ControlledPilotEvaluator,
@@ -541,6 +542,7 @@ def _run_pilot_retrieval_command(
                 limit=top_k,
                 prefetch_limit=max(50, top_k),
                 source=None,
+                writing_asset_type=infer_writing_asset_type(text),
             )
         )
         return PilotRetrievalOutcome(
