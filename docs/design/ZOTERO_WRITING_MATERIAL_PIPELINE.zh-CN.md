@@ -442,7 +442,7 @@ Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖
 - 当前30篇run使用classification-v9/abstraction-v7完成30/30、0失败，严格schema真实provider路径通过；
 - 当前run governance为active至2031-07-19，28/28路径满足private filesystem permissions。
 
-仍保留的边界：Docling `prov.charspan`不能外推到selection之外的全部论文、OCR和跨页自然段；非Docling/PyMuPDF fallback继续fail closed。`local reviewer only`已由独立`writing-material-rbac-v1`执行：正式CLI使用effective POSIX username+UID匹配0600 fingerprinted policy和固定角色权限，并继续叠加run目录private mode检查；这是单机POSIX信任域，不外推为跨主机IdP或MFA。到期处置采用plan→atomic quarantine→30天grace→inventory-verified purge；release/candidate引用或未分区provider cache会fail closed，当前released run仍需Phase 14B完成副本deindex才可自动处置。生产rollback已于2026-07-19完成真实可逆演练：alias从quality-v2/1107切至旧v1/134并通过同一机制恢复，期间未创建snapshot、写collection或重建索引；该验证证明机制可用，但旧集合会恢复旧质量，仍须维护窗口和切换前后health query。
+仍保留的边界：Docling `prov.charspan`不能外推到selection之外的全部论文、OCR和跨页自然段；非Docling/PyMuPDF fallback继续fail closed。`local reviewer only`已由独立`writing-material-rbac-v1`执行：正式CLI使用effective POSIX username+UID匹配0600 fingerprinted policy和固定角色权限，并继续叠加run目录private mode检查；这是单机POSIX信任域，不外推为跨主机IdP或MFA。到期处置采用plan→逐run cache purge→atomic quarantine→30天grace→inventory-verified purge；新cache原子绑定run scope，1281条legacy cache已保守迁移并完成scope fingerprint验证。当前released run仍需Phase 14B2完成7个candidate/release/index副本deindex才可自动处置。生产rollback已于2026-07-19完成真实可逆演练：alias从quality-v2/1107切至旧v1/134并通过同一机制恢复，期间未创建snapshot、写collection或重建索引；该验证证明机制可用，但旧集合会恢复旧质量，仍须维护窗口和切换前后health query。
 
 ## 17. 修改和新增文件
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from knowledgehub.cli.writing_material import (
     add_writing_material_parser,
 )
 from knowledgehub.core.atomic import atomic_write_json
+from knowledgehub.writing_rag.extract import LLMCache
 from knowledgehub.writing_rag.retention import (
     RetentionDispositionError,
     WritingMaterialRetentionService,
@@ -93,7 +95,7 @@ def test_expired_provider_run_blocks_release_references_and_unscoped_cache(tmp_p
     assert entry["references"] == [str(release)]
     assert entry["blockers"] == [
         "run is referenced by candidate or release artifacts",
-        "provider cache lacks per-run retention scope",
+        "provider cache lacks complete per-run retention scope",
     ]
     with pytest.raises(RetentionDispositionError, match="not ready"):
         service.quarantine(
@@ -191,17 +193,148 @@ def test_expired_run_with_permission_drift_is_blocked(tmp_path) -> None:
     )
 
 
+def test_legacy_cache_migration_binds_all_unscoped_entries_without_changing_response(
+    tmp_path,
+) -> None:
+    _, service = _run(tmp_path, provider="openai_compatible")
+    cache = LLMCache(service.cache_root)
+    responses = {
+        "a": {"schema_version": "classification-v9", "items": {}},
+        "b": {"schema_version": "abstraction-v7", "strategies": []},
+    }
+    for key, response in responses.items():
+        cache.put(key, {"operation": "fixture", "response": response})
+    legacy_scoped = service.cache_root / "legacy-scoped.json"
+    cache.put(
+        "legacy-scoped",
+        {"operation": "fixture", "response": {"legacy": True}},
+        retention_scope_run_id=RUN_ID,
+    )
+    legacy_value = json.loads(legacy_scoped.read_text(encoding="utf-8"))
+    legacy_value.pop("retention_scope_fingerprint")
+    atomic_write_json(legacy_scoped, legacy_value, mode=0o600)
+    plan = service.cache_scope_plan(RUN_ID)
+    assert plan["counts"] == {
+        "all": 3,
+        "unscoped": 3,
+        "scoped_to_run": 0,
+        "scoped_other": 0,
+        "invalid": 0,
+    }
+    with pytest.raises(RetentionDispositionError, match="explicit confirmation"):
+        service.migrate_legacy_cache_scope(RUN_ID, confirmed=False)
+    receipt = service.migrate_legacy_cache_scope(RUN_ID, confirmed=True)
+    assert receipt["migrated"] == 3
+    assert receipt["responses_modified"] is False
+    assert service.migrate_legacy_cache_scope(RUN_ID, confirmed=True) == receipt
+    for key, response in responses.items():
+        stored = cache.get(key)
+        assert stored is not None
+        assert stored["response"] == response
+        assert stored["retention_scope_run_ids"] == [RUN_ID]
+    upgraded = cache.get("legacy-scoped")
+    assert upgraded is not None
+    assert isinstance(upgraded["retention_scope_fingerprint"], str)
+
+
+def test_cache_scope_migration_recovers_partial_binding(tmp_path, monkeypatch) -> None:
+    _, service = _run(tmp_path, provider="openai_compatible")
+    cache = LLMCache(service.cache_root)
+    for key in ("a", "b"):
+        cache.put(key, {"operation": "fixture", "response": {"key": key}})
+    real_bind = LLMCache.bind_retention_scope
+    failed = False
+
+    def flaky_bind(self: LLMCache, key: str, run_id: str):  # type: ignore[no-untyped-def]
+        nonlocal failed
+        if key == "b" and not failed:
+            failed = True
+            raise OSError("fixture cache binding interruption")
+        return real_bind(self, key, run_id)
+
+    monkeypatch.setattr(LLMCache, "bind_retention_scope", flaky_bind)
+    with pytest.raises(OSError, match="binding interruption"):
+        service.migrate_legacy_cache_scope(RUN_ID, confirmed=True)
+    receipt = service.migrate_legacy_cache_scope(RUN_ID, confirmed=True)
+    assert receipt["migrated"] == 2
+    assert service.cache_scope_plan(RUN_ID)["counts"]["unscoped"] == 0
+
+
+def test_expired_cache_scope_purge_removes_owned_and_preserves_shared_entries(tmp_path) -> None:
+    _, service = _run(tmp_path, provider="openai_compatible")
+    cache = LLMCache(service.cache_root)
+    cache.put(
+        "owned",
+        {"operation": "fixture", "response": {"value": "owned"}},
+        retention_scope_run_id=RUN_ID,
+    )
+    cache.put(
+        "shared",
+        {"operation": "fixture", "response": {"value": "shared"}},
+        retention_scope_run_id=RUN_ID,
+    )
+    cache.bind_retention_scope("shared", "other-run")
+    expired = datetime(2032, 1, 1, tzinfo=timezone.utc)
+    blocked = service.plan(RUN_ID, now=expired)
+    assert blocked["status"] == "blocked"
+    assert (
+        "provider cache scope must be purged before run quarantine"
+        in blocked["entries"][0]["blockers"]
+    )
+    with pytest.raises(RetentionDispositionError, match="expired run"):
+        service.purge_cache_scope(
+            RUN_ID,
+            confirmed=True,
+            now=datetime(2027, 1, 1, tzinfo=timezone.utc),
+        )
+    receipt = service.purge_cache_scope(RUN_ID, confirmed=True, now=expired)
+    assert receipt["removed"] == 1
+    assert receipt["retained_shared"] == 1
+    assert cache.get("owned") is None
+    shared = cache.get("shared")
+    assert shared is not None
+    assert shared["response"] == {"value": "shared"}
+    assert shared["retention_scope_run_ids"] == ["other-run"]
+    assert service.plan(RUN_ID, now=expired)["status"] == "ready"
+
+
 def test_retention_cli_requires_disposal_permission_and_explicit_destructive_flags() -> None:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     add_writing_material_parser(commands)
     plan = parser.parse_args(["writing-material", "retention", "plan", "--run-id", RUN_ID])
+    cache_plan = parser.parse_args(
+        ["writing-material", "retention", "plan-cache-scope", "--run-id", RUN_ID]
+    )
     quarantine = parser.parse_args(
         ["writing-material", "retention", "quarantine", "--run-id", RUN_ID, "--yes"]
     )
     purge = parser.parse_args(
         ["writing-material", "retention", "purge", "--run-id", RUN_ID, "--yes"]
     )
+    migrate_cache = parser.parse_args(
+        [
+            "writing-material",
+            "retention",
+            "migrate-cache-scope",
+            "--run-id",
+            RUN_ID,
+            "--yes",
+        ]
+    )
+    purge_cache = parser.parse_args(
+        [
+            "writing-material",
+            "retention",
+            "purge-cache-scope",
+            "--run-id",
+            RUN_ID,
+            "--yes",
+        ]
+    )
     assert _required_permission(plan) == "writing_material.retention_dispose"
+    assert _required_permission(cache_plan) == "writing_material.retention_dispose"
     assert quarantine.yes is True
     assert purge.yes is True
+    assert migrate_cache.yes is True
+    assert purge_cache.yes is True

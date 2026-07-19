@@ -9,8 +9,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from knowledgehub.core.atomic import atomic_write_json, fsync_directory, safe_rmtree
+from knowledgehub.core.atomic import (
+    atomic_write_json,
+    fsync_directory,
+    safe_rmtree,
+    safe_unlink,
+)
 from knowledgehub.core.hashing import sha256_file, sha256_json
+from knowledgehub.writing_rag.extract import (
+    CACHE_RETENTION_SCOPE_VERSION,
+    LLMCache,
+)
 from knowledgehub.writing_rag.review import validate_run_governance
 
 RETENTION_PLAN_SCHEMA_VERSION = "writing-material-retention-plan-v1"
@@ -35,7 +44,218 @@ class WritingMaterialRetentionService:
         self.quarantine_root = self.retention_root / "quarantine"
         self.intent_root = self.retention_root / "intents"
         self.receipt_root = self.retention_root / "receipts"
+        self.cache_scope_intent_root = self.retention_root / "cache-scope-intents"
+        self.cache_scope_receipt_root = self.retention_root / "cache-scope-receipts"
+        self.cache_purge_intent_root = self.retention_root / "cache-purge-intents"
+        self.cache_purge_receipt_root = self.retention_root / "cache-purge-receipts"
+        self.cache_root = self.data_root / "cache" / "llm"
         self.quarantine_days = quarantine_days
+
+    def cache_scope_plan(self, run_id: str) -> dict[str, Any]:
+        self._run_dir(run_id)
+        scan = self._scan_cache(run_id)
+        payload: dict[str, Any] = {
+            "schema_version": "writing-material-cache-scope-plan-v1",
+            "status": "blocked" if scan["invalid"] else "ready",
+            "run_id": run_id,
+            "cache_root": str(self.cache_root),
+            "counts": {
+                key: len(scan[key])
+                for key in ("all", "unscoped", "scoped_to_run", "scoped_other", "invalid")
+            },
+            "unscoped_keys_fingerprint": sha256_json(scan["unscoped"]),
+            "invalid": scan["invalid"],
+            "migration_policy": "bind_all_legacy_unscoped_cache_to_approved_run",
+            "dry_run": True,
+            "writes_performed": False,
+            "responses_modified": False,
+            "llm_called": False,
+        }
+        return {**payload, "artifact_fingerprint": sha256_json(payload)}
+
+    def migrate_legacy_cache_scope(
+        self,
+        run_id: str,
+        *,
+        confirmed: bool,
+    ) -> dict[str, Any]:
+        if not confirmed:
+            raise RetentionDispositionError("cache scope migration requires explicit confirmation")
+        run_id = self._validated_run_id(run_id)
+        plan = self.cache_scope_plan(run_id)
+        if plan["status"] != "ready":
+            raise RetentionDispositionError("LLM cache contains invalid retention metadata")
+        self._prepare_private_dirs()
+        pending_intents = [
+            path
+            for path in sorted(self.cache_scope_intent_root.glob(f"{run_id}*.json"))
+            if not (self.cache_scope_receipt_root / path.name).exists()
+        ]
+        if pending_intents:
+            intent_path = pending_intents[0]
+            receipt_path = self.cache_scope_receipt_root / intent_path.name
+        else:
+            revision = str(plan["unscoped_keys_fingerprint"])[:16]
+            intent_path = self.cache_scope_intent_root / f"{run_id}-{revision}.json"
+            receipt_path = self.cache_scope_receipt_root / f"{run_id}-{revision}.json"
+        if plan["counts"]["unscoped"] == 0 and not pending_intents:
+            receipts = sorted(self.cache_scope_receipt_root.glob(f"{run_id}*.json"))
+            if receipts:
+                return self._load_artifact(
+                    receipts[-1],
+                    "writing-material-cache-scope-receipt-v1",
+                )
+        if receipt_path.exists():
+            receipt = self._load_artifact(
+                receipt_path,
+                "writing-material-cache-scope-receipt-v1",
+            )
+            current = self._scan_cache(run_id)
+            if current["invalid"] or current["unscoped"]:
+                raise RetentionDispositionError(
+                    "new unscoped cache appeared after cache scope migration"
+                )
+            return receipt
+        scan = self._scan_cache(run_id)
+        target_keys = scan["unscoped"]
+        intent_payload = {
+            "schema_version": "writing-material-cache-scope-intent-v1",
+            "run_id": run_id,
+            "cache_root": str(self.cache_root),
+            "target_keys": target_keys,
+            "target_keys_fingerprint": sha256_json(target_keys),
+            "plan_fingerprint": plan["artifact_fingerprint"],
+            "migration_policy": plan["migration_policy"],
+        }
+        intent = {**intent_payload, "artifact_fingerprint": sha256_json(intent_payload)}
+        if intent_path.exists():
+            intent = self._load_artifact(
+                intent_path,
+                "writing-material-cache-scope-intent-v1",
+            )
+            target_keys = list(intent["target_keys"])
+        else:
+            atomic_write_json(intent_path, intent, mode=0o600)
+        cache = LLMCache(self.cache_root)
+        for key in target_keys:
+            cache.bind_retention_scope(str(key), run_id)
+        after = self._scan_cache(run_id)
+        if after["invalid"] or after["unscoped"]:
+            raise RetentionDispositionError("cache scope migration did not cover all cache entries")
+        payload: dict[str, Any] = {
+            "schema_version": "writing-material-cache-scope-receipt-v1",
+            "status": "completed",
+            "run_id": run_id,
+            "intent_fingerprint": intent["artifact_fingerprint"],
+            "migrated": len(target_keys),
+            "cache_entries": len(after["all"]),
+            "scoped_to_run": len(after["scoped_to_run"]),
+            "unscoped": 0,
+            "responses_modified": False,
+            "llm_called": False,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        receipt = {**payload, "artifact_fingerprint": sha256_json(payload)}
+        atomic_write_json(receipt_path, receipt, mode=0o600)
+        return receipt
+
+    def purge_cache_scope(
+        self,
+        run_id: str,
+        *,
+        confirmed: bool,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        if not confirmed:
+            raise RetentionDispositionError("cache scope purge requires explicit confirmation")
+        current = self._utc_now(now)
+        run_dir = self._run_dir(run_id)
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        governance = validate_run_governance(run_dir, manifest, now=current)
+        if governance["retention"]["status"] != "expired":
+            raise RetentionDispositionError("cache scope purge requires an expired run")
+        scan = self._scan_cache(run_id)
+        if scan["invalid"] or scan["unscoped"]:
+            raise RetentionDispositionError("cache scope purge requires fully scoped cache entries")
+        self._prepare_private_dirs()
+        intent_path = self.cache_purge_intent_root / f"{run_id}.json"
+        receipt_path = self.cache_purge_receipt_root / f"{run_id}.json"
+        if receipt_path.exists():
+            receipt = self._load_artifact(
+                receipt_path,
+                "writing-material-cache-purge-receipt-v1",
+            )
+            current_scan = self._scan_cache(run_id)
+            if (
+                current_scan["invalid"]
+                or current_scan["unscoped"]
+                or current_scan["scoped_to_run"]
+            ):
+                raise RetentionDispositionError(
+                    "cache entries appeared after the expired scope was purged"
+                )
+            return receipt
+        target_keys = scan["scoped_to_run"]
+        intent_payload = {
+            "schema_version": "writing-material-cache-purge-intent-v1",
+            "run_id": run_id,
+            "target_keys": target_keys,
+            "target_keys_fingerprint": sha256_json(target_keys),
+            "expires_at": governance["retention"]["expires_at"],
+        }
+        intent = {**intent_payload, "artifact_fingerprint": sha256_json(intent_payload)}
+        if intent_path.exists():
+            intent = self._load_artifact(
+                intent_path,
+                "writing-material-cache-purge-intent-v1",
+            )
+            target_keys = list(intent["target_keys"])
+        else:
+            atomic_write_json(intent_path, intent, mode=0o600)
+        removed = 0
+        retained_shared = 0
+        for key in target_keys:
+            path = self.cache_root / f"{key}.json"
+            if not path.exists():
+                continue
+            value = self._cache_value(path)
+            scopes = list(value["retention_scope_run_ids"])
+            if run_id not in scopes:
+                continue
+            remaining = sorted(scope for scope in scopes if scope != run_id)
+            if remaining:
+                updated = dict(value) | {
+                    "retention_scope_run_ids": remaining,
+                    "retention_scope_fingerprint": sha256_json(
+                        {
+                            "cache_key": str(key),
+                            "version": CACHE_RETENTION_SCOPE_VERSION,
+                            "run_ids": remaining,
+                        }
+                    ),
+                }
+                atomic_write_json(path, updated, mode=0o600)
+                retained_shared += 1
+            else:
+                safe_unlink(path, root=self.cache_root, missing_ok=False)
+                removed += 1
+        after = self._scan_cache(run_id)
+        if after["invalid"] or after["unscoped"] or after["scoped_to_run"]:
+            raise RetentionDispositionError("cache scope purge did not remove the expired scope")
+        payload = {
+            "schema_version": "writing-material-cache-purge-receipt-v1",
+            "status": "completed",
+            "run_id": run_id,
+            "intent_fingerprint": intent["artifact_fingerprint"],
+            "removed": removed,
+            "retained_shared": retained_shared,
+            "responses_modified": False,
+            "llm_called": False,
+            "completed_at": current.isoformat(),
+        }
+        receipt = {**payload, "artifact_fingerprint": sha256_json(payload)}
+        atomic_write_json(receipt_path, receipt, mode=0o600)
+        return receipt
 
     def plan(self, run_id: str | None = None, *, now: datetime | None = None) -> dict[str, Any]:
         current = self._utc_now(now)
@@ -241,9 +461,12 @@ class WritingMaterialRetentionService:
             blockers.append("run is referenced by candidate or release artifacts")
         versions = manifest.get("versions")
         provider = str(versions.get("provider") or "") if isinstance(versions, Mapping) else ""
-        cache_files = list((self.data_root / "cache" / "llm").glob("*.json"))
-        if provider not in {"", "deterministic_fixture"} and cache_files:
-            blockers.append("provider cache lacks per-run retention scope")
+        if provider not in {"", "deterministic_fixture"}:
+            cache_scan = self._scan_cache(run_dir.name)
+            if cache_scan["invalid"] or cache_scan["unscoped"]:
+                blockers.append("provider cache lacks complete per-run retention scope")
+            if cache_scan["scoped_to_run"]:
+                blockers.append("provider cache scope must be purged before run quarantine")
         inventory = self._inventory(run_dir)
         return {
             "run_id": run_dir.name,
@@ -275,6 +498,69 @@ class WritingMaterialRetentionService:
                 if isinstance(value, Mapping) and value.get("run_id") == run_id:
                     references.append(str(path))
         return references, errors
+
+    def _scan_cache(self, run_id: str) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {
+            "all": [],
+            "unscoped": [],
+            "scoped_to_run": [],
+            "scoped_other": [],
+            "invalid": [],
+        }
+        if not self.cache_root.is_dir():
+            return result
+        for path in sorted(self.cache_root.glob("*.json")):
+            key = path.stem
+            result["all"].append(key)
+            try:
+                value = self._cache_value(path, allow_unscoped=True)
+            except RetentionDispositionError:
+                result["invalid"].append(key)
+                continue
+            scopes = value.get("retention_scope_run_ids")
+            if scopes is None or value.get("retention_scope_fingerprint") is None:
+                result["unscoped"].append(key)
+            elif run_id in scopes:
+                result["scoped_to_run"].append(key)
+            else:
+                result["scoped_other"].append(key)
+        return result
+
+    @staticmethod
+    def _cache_value(path: Path, *, allow_unscoped: bool = False) -> dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RetentionDispositionError(f"LLM cache entry is unreadable: {path}") from exc
+        if not isinstance(value, dict) or not isinstance(value.get("response"), Mapping):
+            raise RetentionDispositionError("LLM cache entry structure is invalid")
+        scopes = value.get("retention_scope_run_ids")
+        version = value.get("retention_scope_version")
+        fingerprint = value.get("retention_scope_fingerprint")
+        if scopes is None and version is None and fingerprint is None and allow_unscoped:
+            return value
+        if (
+            version != CACHE_RETENTION_SCOPE_VERSION
+            or not isinstance(scopes, list)
+            or not scopes
+            or scopes != sorted(set(scopes))
+            or any(
+                not isinstance(scope, str) or not _RUN_ID.fullmatch(scope)
+                for scope in scopes
+            )
+        ):
+            raise RetentionDispositionError("LLM cache retention scope is invalid")
+        if fingerprint is None and allow_unscoped:
+            return value
+        if fingerprint != sha256_json(
+            {
+                "cache_key": path.stem,
+                "version": CACHE_RETENTION_SCOPE_VERSION,
+                "run_ids": scopes,
+            }
+        ):
+            raise RetentionDispositionError("LLM cache retention scope fingerprint is invalid")
+        return value
 
     @staticmethod
     def _inventory(root: Path) -> list[dict[str, Any]]:
@@ -337,6 +623,10 @@ class WritingMaterialRetentionService:
             self.quarantine_root,
             self.intent_root,
             self.receipt_root,
+            self.cache_scope_intent_root,
+            self.cache_scope_receipt_root,
+            self.cache_purge_intent_root,
+            self.cache_purge_receipt_root,
         ):
             if path.is_symlink():
                 raise RetentionDispositionError("retention state directory must not be a symlink")

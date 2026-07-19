@@ -55,6 +55,7 @@ PROMPT_VERSION = "writing-material-prompts-v16"
 REQUEST_PARTITION_VERSION = "writing-material-request-partition-v2"
 STRUCTURED_OUTPUT_CORRECTION_VERSION = "structured-output-correction-v2"
 STRUCTURED_OUTPUT_CORRECTION_ATTEMPTS = 1
+CACHE_RETENTION_SCOPE_VERSION = "writing-material-cache-retention-scope-v1"
 _STRUCTURED_OUTPUT_CORRECTION_INSTRUCTION = (
     "The previous response was rejected by the strict local validator for the reason "
     "shown below. Generate a fresh response for the unchanged source input. The new "
@@ -448,6 +449,8 @@ class WritingMaterialAnalyzer(Protocol):
     provider: str
     model: str
 
+    def set_retention_scope(self, run_id: str) -> None: ...
+
     def classify(
         self, paragraphs: Sequence[Paragraph], *, refresh_cache: bool = False
     ) -> Mapping[str, Any]: ...
@@ -468,10 +471,84 @@ class LLMCache:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, Mapping) else None
 
-    def put(self, key: str, value: Mapping[str, Any]) -> None:
+    def put(
+        self,
+        key: str,
+        value: Mapping[str, Any],
+        *,
+        retention_scope_run_id: str | None = None,
+    ) -> None:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
-        atomic_write_json(self.root / f"{key}.json", dict(value), mode=0o600)
+        stored = dict(value)
+        if retention_scope_run_id is not None:
+            if not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", retention_scope_run_id
+            ):
+                raise ValueError("invalid cache retention scope run ID")
+            stored.update(
+                {
+                    "retention_scope_version": CACHE_RETENTION_SCOPE_VERSION,
+                    "retention_scope_run_ids": [retention_scope_run_id],
+                    "retention_scope_fingerprint": sha256_json(
+                        {
+                            "cache_key": key,
+                            "version": CACHE_RETENTION_SCOPE_VERSION,
+                            "run_ids": [retention_scope_run_id],
+                        }
+                    ),
+                }
+            )
+        atomic_write_json(self.root / f"{key}.json", stored, mode=0o600)
+
+    def bind_retention_scope(self, key: str, run_id: str) -> Mapping[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
+            raise ValueError("invalid cache retention scope run ID")
+        path = self.root / f"{key}.json"
+        value = self.get(key)
+        if value is None:
+            raise ValueError("cannot bind a missing LLM cache entry")
+        raw_scopes = value.get("retention_scope_run_ids")
+        scopes = (
+            [str(item) for item in raw_scopes]
+            if isinstance(raw_scopes, list)
+            else []
+        )
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", item) for item in scopes):
+            raise ValueError("LLM cache retention scopes are invalid")
+        if (
+            scopes
+            and value.get("retention_scope_fingerprint") is not None
+            and value.get("retention_scope_fingerprint") != sha256_json(
+            {
+                "cache_key": key,
+                "version": CACHE_RETENTION_SCOPE_VERSION,
+                "run_ids": scopes,
+            }
+            )
+        ):
+            raise ValueError("LLM cache retention scope fingerprint is invalid")
+        normalized = sorted({*scopes, run_id})
+        normalized_fingerprint = sha256_json(
+            {
+                "cache_key": key,
+                "version": CACHE_RETENTION_SCOPE_VERSION,
+                "run_ids": normalized,
+            }
+        )
+        if (
+            value.get("retention_scope_version") == CACHE_RETENTION_SCOPE_VERSION
+            and scopes == normalized
+            and value.get("retention_scope_fingerprint") == normalized_fingerprint
+        ):
+            return value
+        updated = dict(value) | {
+            "retention_scope_version": CACHE_RETENTION_SCOPE_VERSION,
+            "retention_scope_run_ids": normalized,
+            "retention_scope_fingerprint": normalized_fingerprint,
+        }
+        atomic_write_json(path, updated, mode=0o600)
+        return updated
 
 
 class OpenAICompatibleAnalyzer:
@@ -494,6 +571,12 @@ class OpenAICompatibleAnalyzer:
         self.cache = LLMCache(config.data_root / "cache" / "llm")
         self.classify_prompt = config.classify_prompt_path.read_text(encoding="utf-8")
         self.abstract_prompt = config.abstract_prompt_path.read_text(encoding="utf-8")
+        self.retention_scope_run_id: str | None = None
+
+    def set_retention_scope(self, run_id: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
+            raise ValueError("invalid analyzer retention scope run ID")
+        self.retention_scope_run_id = run_id
 
     def close(self) -> None:
         self.client.close()
@@ -608,6 +691,11 @@ class OpenAICompatibleAnalyzer:
             response = cached.get("response")
             if isinstance(response, Mapping):
                 validator(response)
+                if self.retention_scope_run_id is not None:
+                    self.cache.bind_retention_scope(
+                        request_hash,
+                        self.retention_scope_run_id,
+                    )
                 return response
         body: dict[str, Any] = {
             "model": self.model,
@@ -661,6 +749,7 @@ class OpenAICompatibleAnalyzer:
                         "response": dict(parsed),
                         "created_at": _now(),
                     },
+                    retention_scope_run_id=self.retention_scope_run_id,
                 )
                 return parsed
             except MaterialValidationError as exc:
@@ -699,6 +788,9 @@ class DeterministicFixtureAnalyzer:
 
     def close(self) -> None:
         return None
+
+    def set_retention_scope(self, run_id: str) -> None:
+        del run_id
 
     def classify(
         self,
@@ -1456,6 +1548,9 @@ class WritingMaterialExtractionService:
                 if self.config.provider == FIXTURE_PROVIDER
                 else OpenAICompatibleAnalyzer(self.config)
             )
+        set_retention_scope = getattr(self.analyzer, "set_retention_scope", None)
+        if callable(set_retention_scope):
+            set_retention_scope(actual_run_id)
         run_dir = self.config.data_root / "runs" / actual_run_id
         if run_dir.exists() and not resume_run_id:
             raise ValueError(f"writing-material run already exists: {actual_run_id}")

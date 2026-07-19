@@ -6,6 +6,9 @@
 
 ```bash
 knowledgehub writing-material retention plan --run-id RUN_ID
+knowledgehub writing-material retention plan-cache-scope --run-id RUN_ID
+knowledgehub writing-material retention migrate-cache-scope --run-id RUN_ID --yes
+knowledgehub writing-material retention purge-cache-scope --run-id RUN_ID --yes
 knowledgehub writing-material retention quarantine --run-id RUN_ID --yes
 knowledgehub writing-material retention purge --run-id RUN_ID --yes
 ```
@@ -14,6 +17,12 @@ knowledgehub writing-material retention purge --run-id RUN_ID --yes
 2. `quarantine`仅接受已到期、无引用且无未分区provider cache的run。它先写0600 immutable intent，再用同文件系统原子rename把run移到0700 quarantine，最后写0600 receipt。缺少`--yes`拒绝。
 3. quarantine默认保留30天。`purge`重新校验receipt fingerprint和完整inventory；宽限期未结束、内容漂移或路径异常均拒绝。成功后使用受root约束的安全删除，并把receipt更新为`purged`。
 4. 如果进程在rename后、receipt写入前中断，再次执行同一quarantine命令会用intent和inventory恢复receipt；不会重新移动或覆盖其他run。purge重复执行也是幂等的。
+
+## Provider cache scope
+
+新LLM cache entry在首次atomic write时保存run scope和scope fingerprint；另一run命中相同cache时追加scope，不修改response。历史unscoped cache使用保守迁移：全部绑定到一个获批legacy run，避免无法反推失败/空响应时漏删。
+
+`migrate-cache-scope`先写versioned intent，再逐项幂等更新，最后写receipt；必须与extraction共用derive lock。到期后先执行`purge-cache-scope`：只有当前run独占的entry会删除，多run共享entry只移除当前scope。任一unscoped、invalid或scope fingerprint漂移均fail closed。
 
 ## 阻断条件
 
@@ -31,4 +40,4 @@ knowledgehub writing-material retention purge --run-id RUN_ID --yes
 
 2026-07-20对run `20260719T064746Z-f99463512f16`执行真实只读plan：状态`not_due`，到期时间`2031-07-19T06:47:32.819105+00:00`，fingerprint `3506c5f5882cb2c1aa4936c27b9176174191bc9a0d93af8a2ae8c3892e7ada4d`，零写入。
 
-使用到期时刻进行只读未来模拟，状态为`blocked`：发现7个candidate/release引用、23个run文件，并检测到provider cache未按run分区。Phase 14A因此没有删除当前run、cache或任何索引；这些依赖由Phase 14B处理。
+初始cache dry-run为1281 total/1281 unscoped/0 invalid。Phase 14B1已迁移为1281 scoped-to-run/0 unscoped/invalid，scope与response fingerprint各0 mismatch；没有修改response或删除cache。使用到期时刻进行只读未来模拟，当前剩余动作是先purge已知cache scope并处理7个candidate/release引用。collection与alias处置由Phase 14B2完成。

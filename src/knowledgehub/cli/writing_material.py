@@ -65,12 +65,21 @@ def add_writing_material_parser(subparsers: Any) -> None:
     retention_plan = retention_commands.add_parser("plan")
     retention_plan.add_argument("--run-id")
     retention_plan.add_argument("--output", type=Path)
+    cache_scope_plan = retention_commands.add_parser("plan-cache-scope")
+    cache_scope_plan.add_argument("--run-id", required=True)
+    cache_scope_plan.add_argument("--output", type=Path)
     retention_quarantine = retention_commands.add_parser("quarantine")
     retention_quarantine.add_argument("--run-id", required=True)
     retention_quarantine.add_argument("--yes", action="store_true")
     retention_purge = retention_commands.add_parser("purge")
     retention_purge.add_argument("--run-id", required=True)
     retention_purge.add_argument("--yes", action="store_true")
+    migrate_cache_scope = retention_commands.add_parser("migrate-cache-scope")
+    migrate_cache_scope.add_argument("--run-id", required=True)
+    migrate_cache_scope.add_argument("--yes", action="store_true")
+    purge_cache_scope = retention_commands.add_parser("purge-cache-scope")
+    purge_cache_scope.add_argument("--run-id", required=True)
+    purge_cache_scope.add_argument("--yes", action="store_true")
 
     extract = commands.add_parser("extract")
     extract.add_argument("--selection", type=Path)
@@ -227,28 +236,51 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
         if args.writing_material_command == "retention":
             retention = WritingMaterialRetentionService(materials.data_root)
             command = args.writing_material_retention_command
-            if command == "plan":
-                result = retention.plan(args.run_id)
+            if command in {"plan", "plan-cache-scope"}:
+                result = (
+                    retention.plan(args.run_id)
+                    if command == "plan"
+                    else retention.cache_scope_plan(args.run_id)
+                )
                 if args.output is not None:
                     atomic_write_json(args.output, result, mode=0o600)
             else:
                 if command == "quarantine":
                     def operation() -> dict[str, Any]:
                         return retention.quarantine(args.run_id, confirmed=args.yes)
-                else:
+                    receipt_group = "receipts"
+                elif command == "purge":
                     def operation() -> dict[str, Any]:
                         return retention.purge(args.run_id, confirmed=args.yes)
+                    receipt_group = "receipts"
+                elif command == "migrate-cache-scope":
+                    def operation() -> dict[str, Any]:
+                        return retention.migrate_legacy_cache_scope(
+                            args.run_id,
+                            confirmed=args.yes,
+                        )
+                    receipt_group = "cache-scope-receipts"
+                else:
+                    def operation() -> dict[str, Any]:
+                        return retention.purge_cache_scope(
+                            args.run_id,
+                            confirmed=args.yes,
+                        )
+                    receipt_group = "cache-purge-receipts"
                 result = _executor().execute(
                     f"writing_material_retention_{command}",
                     operation,
                     knowledge_base="writing",
                     version=args.run_id,
                     inputs={"run_id": args.run_id, "operation": command, "confirmed": args.yes},
-                    lock_keys=(f"retention:writing-materials:{args.run_id}",),
+                    lock_keys=(
+                        "derive:writing-materials",
+                        f"retention:writing-materials:{args.run_id}",
+                    ),
                     output_manifest=lambda _value: str(
                         materials.data_root
                         / "retention"
-                        / "receipts"
+                        / receipt_group
                         / f"{args.run_id}.json"
                     ),
                 )

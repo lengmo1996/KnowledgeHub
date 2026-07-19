@@ -5,7 +5,7 @@
 - 审计性质：实现状态、验证和后续范围审计；各阶段实际写入边界以对应补充节为准
 - 状态口径：历史基线使用`IMPLEMENTED`、`PARTIAL`、`PLACEHOLDER`、`DOCUMENTED_ONLY`、`NOT_IMPLEMENTED`、`DIVERGED`、`BLOCKED`、`UNKNOWN`；当前态使用`INTERNAL_VERIFIED`、`EXTERNAL_VERIFIED`和明确保留边界
 
-> Phase 9终态注记（2026-07-19，Phase 14A更新于2026-07-20）：本文第1–15节和其中的`PARTIAL`/`NOT_IMPLEMENTED`矩阵是实施前历史基线，不得再作为当前任务清单。当前30篇correction-v2 extraction为30/30、0失败；2496项complete review、973项accepted derived materials、retrieval/source-join、clone-and-merge production release、质量复审与acknowledgement均已闭环。用户明确保持30篇pilot、不扩量。当前权威状态为本节矩阵、Phase 16–27补充和实施计划Phase 1–14A。
+> Phase 9终态注记（2026-07-19，Phase 14B1更新于2026-07-20）：本文第1–15节和其中的`PARTIAL`/`NOT_IMPLEMENTED`矩阵是实施前历史基线，不得再作为当前任务清单。当前30篇correction-v2 extraction为30/30、0失败；2496项complete review、973项accepted derived materials、retrieval/source-join、clone-and-merge production release、质量复审与acknowledgement均已闭环。用户明确保持30篇pilot、不扩量。当前权威状态为本节矩阵、Phase 16–28补充和实施计划Phase 1–14B1。
 
 ## 0. 当前态完成性矩阵（更新至2026-07-19）
 
@@ -28,10 +28,10 @@
 | 全部人工 decision、candidate 检索验收 | `EXTERNAL_VERIFIED` | 2496项complete accepted-v2；隔离candidate 973/973与8-case retrieval/source-join均通过 |
 | 是否扩量 | `EXTERNAL_VERIFIED`（决定） | 用户于2026-07-19明确选择`保持当前 pilot，不扩量`；结果为`stop_at_validated_pilot`，不创建新selection、不继续extraction且不授权promotion |
 | quality review versioning、receipt与acknowledgement | `EXTERNAL_VERIFIED` | versioned accepted revision `rev-2519697bb0043f04f9009e3c`、0600 receipt、audit-v2 fingerprint `c89ebb39...a85e5`；`passed=false`、`review_required=false` |
-| retention/access运行治理 | `EXTERNAL_VERIFIED + PARTIAL` | 当前five-year active至2031-07-19、28/28 paths private、POSIX RBAC启用；无引用expired run的quarantine/purge已验证。released run仍需Phase 14B清除7个candidate/release引用和unscoped cache后才能自动处置 |
-| Git 实施历史 | `INTERNAL_VERIFIED` | Phase 13提交后领先`origin/main` 14 commits；Phase 14A提交后为15 commits，均尚未push |
+| retention/access运行治理 | `EXTERNAL_VERIFIED + PARTIAL` | 当前five-year active至2031-07-19、28/28 paths private、POSIX RBAC启用；1281 cache已逐run scoped且未来可清除。released run仍需Phase 14B2清除7个candidate/release/index引用 |
+| Git 实施历史 | `INTERNAL_VERIFIED` | Phase 14A提交后领先`origin/main` 15 commits；Phase 14B1提交后为16 commits，均尚未push |
 
-Phase 1–13及Phase 14A已经完成，当前为`stop_at_acknowledged_quality_findings`：30篇pilot不扩量，production release为1107 points，质量receipt、运行治理和独立POSIX RBAC已验证，rollback真实切换与恢复已完成。到期处置对无引用run已闭环，对released run仍是明确`PARTIAL`。语言分布仍为en=2470、zh=23、und=3；这是当前不扩量范围的代表性边界，不是自动扩量授权。
+Phase 1–13、Phase 14A与14B1已经完成，当前为`stop_at_acknowledged_quality_findings`：30篇pilot不扩量，production release为1107 points，质量receipt、运行治理和独立POSIX RBAC已验证，rollback真实切换与恢复已完成。到期处置对无引用run和cache scope已闭环，对released collection仍是明确`PARTIAL`。语言分布仍为en=2470、zh=23、und=3；这是当前不扩量范围的代表性边界，不是自动扩量授权。
 
 ## 1. 结论摘要（实施前历史基线）
 
@@ -547,3 +547,15 @@ Phase 13消除了Phase 10所记录的`identity_enforced=false`当前缺口。历
 - **NO PRODUCTION MUTATION**：没有真实quarantine/purge、LLM、extraction、review、cache、index、collection或alias写入；所有破坏路径只在/tmp fixture执行。
 
 当前自动到期处置状态为`PARTIAL`：unreferenced run闭环完成，released run的cache/index副本处置尚未完成。下一阶段Phase 14B必须建立cache retention scope，并为所有绑定collection/candidate提供验证后deindex与引用解除；完成前不得把当前run标为自动可删除。
+
+## 28. Phase 14B1 逐 run cache retention scope（2026-07-20）
+
+- **IMPLEMENTED**：新cache atomic write即绑定run scope和scope fingerprint；cache hit被另一run复用时追加scope。response及response hash不受scope元数据变更影响。
+- **CONSERVATIVE LEGACY MIGRATION**：历史请求不能完整反推失败/空响应归属，因此所有unscoped legacy cache绑定当前获批run；避免漏删，代价仅是到期时可能清除额外可重建cache。
+- **RECOVERABLE**：versioned migration intent固定target key set，部分完成可重试；旧receipt不能掩盖后来出现的unscoped entry。真实fingerprint升级第一次失败后从intent恢复，Task retry_count=1。
+- **EXPIRED PURGE IMPLEMENTED**：独占scope entry删除；共享entry只去掉expired run并重算scope fingerprint。active run拒绝，invalid/unscoped metadata拒绝，操作受RBAC和derive+retention双锁控制。
+- **EXTERNAL VERIFIED**：初始1281 unscoped/0 invalid，plan fingerprint `0ccd86ea...5144d9`；最终1281 scoped-to-run、0 unscoped/invalid、0 response hash mismatch、0 scope fingerprint mismatch。最终receipt `d16cde00...96cba8`。
+- **VERIFIED**：writing-material 185 passed、全仓569 passed、Ruff passed、mypy 131 source files passed、`git diff --check` passed。
+- **MUTATION BOUNDARY**：真实写入仅为1281个cache文件的scope元数据、versioned intent/receipts和TaskStore审计；没有修改response、调用LLM、删除cache、修改run/review/index/collection/alias。
+
+当前未来到期阻断已从“unscoped cache + 7 references”收敛为“已知cache scope待到期purge + 7 references”。Phase 14B2必须先安全回退active alias（若仍绑定该run），再删除仅绑定该run的physical collections并隔离对应本地candidate/release工件；此步骤尚未实现或执行。

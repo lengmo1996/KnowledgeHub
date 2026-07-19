@@ -2,7 +2,7 @@
 
 - 基线审计：`docs/writing_material_extraction_implementation_audit.md`
 - 原则：只列未完成或需修正工作；先 provenance/exact-span/schema/dry-run，再扩量；正式索引前必须有人审 gate
-- 当前状态：Phase 1–13及Phase 14A全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。production alias经真实可逆rollback演练后已恢复为quality-v2 active/1107。用户保持30篇pilot、不扩量。质量finding已全部acknowledged；five-year retention active至2031-07-19、28/28 run paths private；独立POSIX身份RBAC已为`lengmo`启用。到期run的安全quarantine/宽限期purge闭环已实现；当前released run的索引引用和shared cache清除进入Phase 14B。没有新的LLM、扩量、审核内容修改或索引重建。
+- 当前状态：Phase 1–13、Phase 14A与14B1全部完成。run `20260719T064746Z-f99463512f16`为30/30、0失败、source verified；2496项complete review、973项accepted derived materials。production alias经真实可逆rollback演练后已恢复为quality-v2 active/1107。用户保持30篇pilot、不扩量。质量finding已全部acknowledged；five-year retention active至2031-07-19、28/28 run paths private；独立POSIX身份RBAC已为`lengmo`启用。1281条legacy LLM cache已完成逐run retention scope和防篡改fingerprint迁移；released run仍有7个candidate/release引用，进入Phase 14B2。没有新的LLM、扩量、审核内容修改或索引重建。
 
 ## Phase 1：状态与 schema 安全收口（P0）
 
@@ -862,3 +862,21 @@ Phase 13结论：当前`local reviewer only`不再只依赖文件mode；实际CL
 实际修改文件：`src/knowledgehub/writing_rag/retention.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_retention.py`、retention runbook、设计文档、本计划与实施审计。
 
 Phase 14A结论：未发布、无共享cache依赖的到期run已经具备安全自动处置闭环；当前production run不会因到期而留下不可追踪副本。完整自动到期处置尚未标记完成：Phase 14B必须先实现逐run cache scope和所有candidate/release/index副本的可验证deindex/引用解除，再允许当前released run进入quarantine。当前真实run仍未到期，本阶段没有删除或移动任何真实数据。
+
+## Phase 14B1：逐 run cache retention scope（2026-07-20）
+
+1. [x] 新provider cache entry在首次atomic write时即保存`writing-material-cache-retention-scope-v1`、run IDs和scope fingerprint；不存在response已写但scope尚未落盘的窗口。
+2. [x] cache hit被新run复用时原子追加run scope；多run共享条目按排序集合记录，response及原`response_hash`不变。
+3. [x] 新增保守legacy migration：历史cache无法完整反推失败/空响应所属请求，因此把全部unscoped条目绑定当前获批legacy run；过度归属只会在五年后多删可重建cache，不会漏删run数据。
+4. [x] migration先写versioned intent，逐entry幂等绑定，最后写fingerprinted receipt；部分迁移中断可从原target set恢复，新出现的unscoped entry会fail closed而不是被旧receipt掩盖。
+5. [x] 新增到期`purge-cache-scope`：仅expired run可执行；独占entry安全删除，共享entry只移除当前scope并重算fingerprint，response不改；intent/receipt和TaskStore lock支持重试。
+6. [x] retention plan现在区分unknown unscoped cache与已知run scope；前者要求迁移，后者要求到期scope purge，scoped-other不阻止当前run。
+7. [x] CLI新增`plan-cache-scope`、`migrate-cache-scope --yes`、`purge-cache-scope --yes`，统一要求RBAC retention-dispose，并与extraction共用`derive:writing-materials`锁避免并发新cache。
+8. [x] 真实dry-run：1281 total/1281 unscoped/0 invalid，plan fingerprint `0ccd86eaef9728be7800842741592aa8a41dc698a4755f9885e8c242f25144d9`；随后迁移1281项，receipt fingerprint `3dc06f68bad1ae271dc1640a733aaff3f692ba4820b315f41cb3e83a54e9a566`。
+9. [x] scope fingerprint升级第一次安全失败，修复后从同一intent/Task retry恢复；最终receipt fingerprint `d16cde0066733cbc4c37a23c34bc8f8b6136cf72c5ddbb3dbe0a74f3cf96cba8`、retry_count=1。
+10. [x] 真实重读1281/1281 scoped-to-run、0 unscoped/invalid、0 response-hash mismatch、0 scope-fingerprint mismatch；未调用LLM、未改response、未删除cache。
+11. [x] fixture覆盖new write、cache reuse multi-scope、legacy migration、partial recovery、active拒绝、expired独占删除/共享保留和CLI；writing-material 185 passed、全仓569 passed、Ruff、mypy 131 source files及`git diff --check`通过。
+
+实际修改文件：`src/knowledgehub/writing_rag/extract.py`、`src/knowledgehub/writing_rag/retention.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_retention.py`、`tests/writing_material/test_provider_and_dedup.py`、retention runbook、设计文档、本计划与实施审计。
+
+Phase 14B1结论：shared provider cache从不可归属阻断转为可验证、可按run清除的已知依赖。当前run尚未到期，因此没有执行cache purge。未来到期模拟现在只剩两个显式动作：先purge当前run的1281个cache scope，再处理7个candidate/release引用。Phase 14B2将实现alias安全回退、绑定collection清除和本地引用隔离；完整自动到期处置继续保持`PARTIAL`，不提前标完成。

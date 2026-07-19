@@ -132,14 +132,20 @@ def test_openai_compatible_adapter_uses_strict_schema_and_private_cache(
     analyzer = OpenAICompatibleAnalyzer(
         _config(tmp_path, literature), transport=httpx.MockTransport(handler)
     )
+    analyzer.set_retention_scope("run-one")
     assert analyzer.classify([paragraph])["items"] == {}
     assert analyzer.classify([paragraph])["items"] == {}
     assert analyzer.classify([paragraph], refresh_cache=True)["items"] == {}
+    analyzer.set_retention_scope("run-two")
+    assert analyzer.classify([paragraph])["items"] == {}
     analyzer.close()
     assert len(calls) == 2
     cache_files = list((tmp_path / "materials" / "cache" / "llm").glob("*.json"))
     assert len(cache_files) == 1
     assert cache_files[0].stat().st_mode & 0o777 == 0o600
+    cache_value = json.loads(cache_files[0].read_text(encoding="utf-8"))
+    assert cache_value["retention_scope_version"] == "writing-material-cache-retention-scope-v1"
+    assert cache_value["retention_scope_run_ids"] == ["run-one", "run-two"]
     first_body = json.loads(calls[0].content)
     expected_pre_correction_cache_key = sha256_json(
         {
