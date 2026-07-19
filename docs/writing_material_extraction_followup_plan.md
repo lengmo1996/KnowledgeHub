@@ -909,6 +909,7 @@ Phase 14B2结论：released run的alias、物理collection和7个本地引用已
 8. [x] 当前真实run协调plan为`not_due`，三个步骤均`required=false/status=not_due`，expires_at=`2031-07-19T06:47:32.819105+00:00`，fingerprint `2c46ec7b78ca69696cd2594f80a30381faf294991092d70e9a32070299e8fcd4`。
 9. [x] 当前reference purge计划为`not_available`（retirement尚未发生），fingerprint `ec84c806bfd02d297b736d05cdbdfaa28aa67191b40eebae497499dc835a1320`；两个真实计划都明确writes/index/LLM=false。
 10. [x] fixture覆盖not_due零Qdrant I/O、严格三步顺序、unscoped/cache-reappearance阻断、released/unreleased run、双grace、partial reference/coordinated purge恢复、coordinator receipt中断恢复和独立处置接管；writing-material 204 passed、全仓588 passed、Ruff passed、mypy 133 source files和`git diff --check`通过。
+11. [x] Phase 14C提交为`49c12cb`。手动HTTPS push最初返回无credential，但随后`git ls-remote origin refs/heads/main`真实读回完整commit `49c12cb38a9bc4a0b9d96239ec6b211fe1d2e2e8`；远端同步已外部验证，本地`main`与`origin/main`一致。
 
 实际修改文件：`src/knowledgehub/writing_rag/retention_coordinator.py`、`src/knowledgehub/writing_rag/release_retention.py`、`src/knowledgehub/writing_rag/retention.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_release_retention.py`、`tests/writing_material/test_retention.py`、retention runbook、设计文档、本计划与实施审计。
 

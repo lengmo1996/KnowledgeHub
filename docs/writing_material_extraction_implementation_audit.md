@@ -29,7 +29,7 @@
 | 是否扩量 | `EXTERNAL_VERIFIED`（决定） | 用户于2026-07-19明确选择`保持当前 pilot，不扩量`；结果为`stop_at_validated_pilot`，不创建新selection、不继续extraction且不授权promotion |
 | quality review versioning、receipt与acknowledgement | `EXTERNAL_VERIFIED` | versioned accepted revision `rev-2519697bb0043f04f9009e3c`、0600 receipt、audit-v2 fingerprint `c89ebb39...a85e5`；`passed=false`、`review_required=false` |
 | retention/access运行治理 | `INTERNAL_VERIFIED + CURRENT_NOT_DUE` | 当前five-year active至2031-07-19、28/28 paths private、POSIX RBAC启用；1281 cache逐run scoped。Phase 14C已完成cache→release→run协调处置、双quarantine grace/purge和中断恢复；真实run因未到期只执行零写入plan |
-| Git 实施历史 | `INTERNAL_VERIFIED` | Phase 14B2提交`efd829a`已进入当前`main`；Phase 14C实现、测试和文档在本阶段提交并按用户授权push，不把未push状态误报为远端完成 |
+| Git 实施历史 | `EXTERNAL_VERIFIED` | Phase 14B2提交`efd829a`和Phase 14C提交`49c12cb`均已在远端`main`；`git ls-remote origin refs/heads/main`读回`49c12cb38a9bc4a0b9d96239ec6b211fe1d2e2e8` |
 
 Phase 1–14C已经完成，当前为`stop_at_acknowledged_quality_findings`：30篇pilot不扩量，production release为1107 points，质量receipt、运行治理和独立POSIX RBAC已验证，rollback真实切换与恢复已完成。到期处置对cache、released collection、本地引用及run双quarantine形成协调闭环；当前run未到期且未执行真实处置。语言分布仍为en=2470、zh=23、und=3；这是当前不扩量范围的代表性边界，不是自动扩量授权。
 
@@ -581,5 +581,6 @@ Phase 13消除了Phase 10所记录的`identity_enforced=false`当前缺口。历
 - **CLI + RBAC**：`retention {plan-disposition,dispose,plan-disposition-purge,purge-disposition,plan-reference-purge,purge-references}`均受retention-dispose与release双权限控制；mutation使用derive、promotion、per-run retention锁。
 - **CURRENT EXTERNAL DRY-RUN**：真实run为`not_due`，三个步骤均未启用，fingerprint `2c46ec7b...8fcd4`；reference purge为`not_available`，fingerprint `ec84c806...a1320`。二者writes/index/LLM均为false。
 - **VERIFIED**：writing-material 204 passed、全仓588 passed、Ruff passed、mypy 133 source files和`git diff --check`通过。
+- **GIT REMOTE VERIFIED**：手动HTTPS push最初返回无credential，但随后本地tracking ref和只读`git ls-remote`均确认远端`main`为Phase 14C提交`49c12cb38a9bc4a0b9d96239ec6b211fe1d2e2e8`。据此只报告远端读回事实，不把失败命令本身误判为最终远端状态。
 
 自动到期处置当前分类更新为**IMPLEMENTED + FIXTURE_VERIFIED + CURRENT_NOT_DUE**。这表示到期时具有安全命令闭环，并不表示当前run已被提前删除，也不表示仓库内新增常驻scheduler。生产run仍active至2031-07-19；外部调度只能在只读plan返回ready后调用确认门控命令。
