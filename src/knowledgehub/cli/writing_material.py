@@ -11,9 +11,13 @@ from typing import Any, Mapping
 from knowledgehub.core.atomic import atomic_write_json
 from knowledgehub.core.hashing import sha256_text
 from knowledgehub.governance.tasks import TaskExecutor, TaskStore, default_task_store_path
-from knowledgehub.governance.validation import HubValidator
 from knowledgehub.hub.config import HubConfig
 from knowledgehub.indexing.incremental import IncrementalChunkIndexer
+from knowledgehub.writing_rag.access import (
+    RBAC_PERMISSIONS,
+    RBAC_ROLES,
+    WritingMaterialAccessControl,
+)
 from knowledgehub.writing_rag.extract import WritingMaterialExtractionService
 from knowledgehub.writing_rag.materials import infer_writing_asset_type
 from knowledgehub.writing_rag.pilot import (
@@ -38,6 +42,20 @@ def add_writing_material_parser(subparsers: Any) -> None:
         help="Extract and review provenance-verified writing materials",
     )
     commands = root.add_subparsers(dest="writing_material_command", required=True)
+
+    access = commands.add_parser("access")
+    access_commands = access.add_subparsers(
+        dest="writing_material_access_command", required=True
+    )
+    bootstrap_access = access_commands.add_parser("bootstrap")
+    bootstrap_access.add_argument("--subject", required=True)
+    bootstrap_access.add_argument(
+        "--role", action="append", dest="roles", choices=sorted(RBAC_ROLES), required=True
+    )
+    bootstrap_access.add_argument("--yes", action="store_true")
+    access_commands.add_parser("status")
+    check_access = access_commands.add_parser("check")
+    check_access.add_argument("--permission", choices=sorted(RBAC_PERMISSIONS), required=True)
 
     extract = commands.add_parser("extract")
     extract.add_argument("--selection", type=Path)
@@ -162,9 +180,34 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
     try:
         config = HubConfig.load(args.hub_config or Path("configs/knowledgehub.yaml"))
         materials = config.writing_materials
+        rbac_policy_path = getattr(materials, "rbac_policy_path", None)
+        access = (
+            WritingMaterialAccessControl(rbac_policy_path)
+            if rbac_policy_path is not None
+            else None
+        )
+        if args.writing_material_command == "access":
+            if access is None:
+                raise ValueError("writing-material RBAC policy path is not configured")
+            if args.writing_material_access_command == "bootstrap":
+                result = access.bootstrap(
+                    subject=args.subject,
+                    roles=args.roles,
+                    confirmed=args.yes,
+                )
+            elif args.writing_material_access_command == "status":
+                result = access.status()
+            else:
+                result = access.check(args.permission)
+            _emit(result)
+            return 0 if result.get("status") != "denied" else 1
+        access_authorization = (
+            access.require(_required_permission(args)) if access is not None else None
+        )
         review = WritingMaterialReviewService(
             materials.data_root,
             materials.literature_data_dir,
+            access_authorization=access_authorization,
         )
         if args.writing_material_command == "extract":
             selection = _selection_for_extract(args, review)
@@ -370,9 +413,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
             _emit(result)
             return 0
         if args.writing_material_command == "validate":
-            result = HubValidator.writing_material_run(
-                materials.data_root,
-                materials.literature_data_dir,
+            result = review.validate(
                 args.run_id,
                 verify_source=not args.no_source_check,
             )
@@ -505,6 +546,25 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
     except Exception as exc:
         _emit({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         return 2
+
+
+def _required_permission(args: argparse.Namespace) -> str:
+    command = args.writing_material_command
+    if command == "extract":
+        return "writing_material.extract"
+    if command == "review":
+        return "writing_material.review"
+    if command == "index":
+        return "writing_material.index"
+    if command == "release":
+        return "writing_material.release"
+    if command == "pilot":
+        pilot_command = args.writing_material_pilot_command
+        if pilot_command == "approve-extraction":
+            return "writing_material.extract"
+        if pilot_command == "render-quality-review":
+            return "writing_material.review"
+    return "writing_material.read"
 
 
 def _selection_for_extract(

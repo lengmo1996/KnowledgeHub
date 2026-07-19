@@ -91,6 +91,7 @@ def validate_run_governance(
     manifest: Mapping[str, Any],
     *,
     now: datetime | None = None,
+    access_authorization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Audit declared retention and private local access without mutating artifacts."""
 
@@ -184,11 +185,16 @@ def validate_run_governance(
         errors.append("pilot approval rights basis is missing")
     access = {
         "policy": access_policy,
-        "enforcement": "private_filesystem_permissions",
+        "enforcement": (
+            "posix_identity_rbac_and_private_filesystem_permissions"
+            if access_authorization is not None
+            else "private_filesystem_permissions"
+        ),
         "status": "private" if private_paths == checked_paths else "permission_drift",
         "checked_paths": checked_paths,
         "private_paths": private_paths,
-        "identity_enforced": False,
+        "identity_enforced": access_authorization is not None,
+        "rbac": dict(access_authorization) if access_authorization is not None else None,
     }
     return {
         "schema_version": "writing-material-governance-validation-v1",
@@ -211,9 +217,12 @@ class WritingMaterialReviewService:
         self,
         data_root: Path,
         literature_data_dir: Path,
+        *,
+        access_authorization: Mapping[str, Any] | None = None,
     ) -> None:
         self.data_root = data_root
         self.reader = ProvenanceDocumentReader(literature_data_dir)
+        self.access_authorization = access_authorization
 
     def run_dir(self, run_id: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
@@ -1069,7 +1078,11 @@ class WritingMaterialReviewService:
             }
         except (ReviewValidationError, TypeError, ValueError) as exc:
             return {"status": "failed", "run_id": run_id, "errors": [str(exc)]}
-        governance = validate_run_governance(run_dir, manifest)
+        governance = validate_run_governance(
+            run_dir,
+            manifest,
+            access_authorization=self.access_authorization,
+        )
         errors.extend(str(value) for value in governance["errors"])
         versions = manifest.get("versions")
         if not isinstance(versions, Mapping):

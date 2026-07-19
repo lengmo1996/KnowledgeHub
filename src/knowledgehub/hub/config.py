@@ -46,6 +46,7 @@ class WritingMaterialHubConfig:
     taxonomy_path: Path
     classify_prompt_path: Path
     abstract_prompt_path: Path
+    rbac_policy_path: Path | None = None
     provider: str = "openai_compatible"
     base_url_env: str = "KH_WRITING_MATERIAL_LLM_BASE_URL"
     api_key_env: str = "KH_WRITING_MATERIAL_LLM_API_KEY"
@@ -186,6 +187,11 @@ class HubConfig:
             ),
             abstract_prompt_path=resolve_material(
                 prompts.get("abstract"), root / "writing" / "prompts" / "abstract-v7.md"
+            ),
+            rbac_policy_path=(
+                resolve_material(materials_raw.get("rbac_policy_path"), Path("."))
+                if materials_raw.get("rbac_policy_path") not in (None, "")
+                else None
             ),
             provider=str(materials_raw.get("provider") or "openai_compatible"),
             base_url_env=str(

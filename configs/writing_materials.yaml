@@ -1,6 +1,7 @@
 schema_version: 1
 data_root: /data/KnowledgeHub/writing-materials
 literature_data_dir: /data/KnowledgeHub/rag/zotero
+rbac_policy_path: /data/KnowledgeHub/writing-materials/access/rbac-policy.json
 taxonomy_path: writing/taxonomy-v1.yaml
 prompts:
   classify: writing/prompts/classify-v9.md

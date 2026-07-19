@@ -82,6 +82,31 @@ def test_run_governance_verifies_five_year_private_policy(tmp_path) -> None:
     assert result["access"]["identity_enforced"] is False
 
 
+def test_run_governance_reports_independent_rbac_identity(tmp_path) -> None:
+    run_dir, manifest = _governance_run(tmp_path)
+    authorization = {
+        "schema_version": "writing-material-rbac-status-v1",
+        "status": "granted",
+        "identity": {"kind": "posix_euid", "subject": "lengmo", "uid": 1000},
+        "roles": ["reviewer"],
+        "permissions": ["writing_material.read", "writing_material.review"],
+        "required_permission": "writing_material.read",
+        "granted": True,
+    }
+    result = validate_run_governance(
+        run_dir,
+        manifest,
+        now=datetime(2027, 7, 19, tzinfo=timezone.utc),
+        access_authorization=authorization,
+    )
+    assert result["status"] == "verified"
+    assert result["access"]["identity_enforced"] is True
+    assert result["access"]["enforcement"] == (
+        "posix_identity_rbac_and_private_filesystem_permissions"
+    )
+    assert result["access"]["rbac"] == authorization
+
+
 def test_run_governance_blocks_expired_retention(tmp_path) -> None:
     run_dir, manifest = _governance_run(tmp_path)
     result = validate_run_governance(

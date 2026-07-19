@@ -2,6 +2,25 @@
 
 本手册只覆盖 30–50 篇冻结 selection 的受控 pilot。它不授权真实 LLM、全库处理、生产索引写入或 alias promotion；这些操作仍需各自满足实施计划中的批准门。
 
+## 独立本机 RBAC
+
+正式配置通过`rbac_policy_path`启用独立访问策略。首次bootstrap只能由策略目标POSIX用户执行，且不可覆盖已有策略：
+
+```bash
+knowledgehub writing-material access bootstrap \
+  --subject lengmo \
+  --role administrator \
+  --role reviewer \
+  --yes
+
+knowledgehub writing-material access status
+knowledgehub writing-material access check --permission writing_material.review
+```
+
+认证主体始终来自进程effective UID对应的POSIX用户名，没有`--actor`覆盖。策略目录/文件必须为当前UID所有并分别0700/0600；symlink、mode/owner漂移、fingerprint或closed-schema错误均fail closed。角色为`viewer`、`reviewer`、`operator`、`release_manager`、`retention_manager`和`administrator`；CLI分别检查read/review/extract/index/release/retention-dispose/administer权限。
+
+没有配置策略路径的旧fixture保持兼容，但正式`configs/writing_materials.yaml`已经配置策略，因此策略缺失不会退化到仅文件权限。当前实现属于单机POSIX身份域，不提供远程IdP或MFA。
+
 ## 1. Dry-run gate
 
 先执行 extraction dry-run，并用显式 `--output` 将权限为 0600 的 JSON 保存到临时受控目录：
