@@ -31,6 +31,7 @@ REVIEW_STATUS_SCHEMA_VERSION = "writing-material-review-status-v1"
 ACCEPTED_SCHEMA_VERSION = "writing-material-accepted-v2"
 ACCEPTED_POINTER_SCHEMA_VERSION = "writing-material-accepted-pointer-v1"
 QUALITY_REVIEW_PACKET_SCHEMA_VERSION = "writing-material-quality-review-packet-v1"
+QUALITY_REVIEW_RECEIPT_SCHEMA_VERSION = "writing-material-quality-review-receipt-v1"
 INDEX_PROCESSOR_VERSION = "writing-material-index-v4"
 CANDIDATE_SCHEMA_VERSION = "writing-material-candidate-v1"
 _INDEX_CHUNK_NAMESPACE = uuid.UUID("f67b77bb-f6fc-56e6-9c37-620f3223bbb1")
@@ -325,6 +326,12 @@ class WritingMaterialReviewService:
         finally:
             normalized_path.unlink(missing_ok=True)
         after = self.validate(run_id, verify_source=True)
+        receipt = self._write_quality_review_receipt(
+            run_id,
+            packet=packet,
+            decisions_path=decisions_path,
+            decisions=normalized,
+        )
         base_result.update(
             {
                 "review_events_modified": bool(applied["events_appended"]),
@@ -334,10 +341,261 @@ class WritingMaterialReviewService:
                 "review_counts": after["review_counts"],
                 "imported": applied["events_appended"],
                 "idempotent": not bool(applied["events_appended"]),
+                "quality_review_receipt": receipt,
             }
         )
         base_result["artifact_fingerprint"] = sha256_json(base_result)
         return base_result
+
+    def reconcile_quality_review_receipt(
+        self,
+        run_id: str,
+        *,
+        packet_path: Path,
+        decisions_path: Path,
+        dry_run: bool = False,
+        confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Record a missing receipt after proving a historical quality import was applied."""
+
+        validation = self.validate(run_id, verify_source=True)
+        if validation.get("status") != "success" or not validation.get("index_eligible"):
+            raise ReviewValidationError(
+                "quality receipt reconciliation requires a source-verified complete snapshot"
+            )
+        packet = self._validate_quality_packet(
+            run_id,
+            packet_path=packet_path,
+            accepted_manifest_sha256=None,
+        )
+        accepted_dir = self.accepted_dir(run_id)
+        accepted_assets = self._accepted_asset_map(accepted_dir)
+        records = self._records(self.run_dir(run_id))
+        targets = self._targets(records)
+        normalized: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        packet_items = {
+            str(item["asset_id"]): item
+            for item in packet["items"]
+            if isinstance(item, Mapping)
+        }
+        decisions = _read_jsonl(decisions_path)
+        if len(decisions) != len(packet_items):
+            raise ReviewValidationError(
+                "quality review decisions must cover every packet item exactly once"
+            )
+        for line_number, value in enumerate(decisions, start=1):
+            asset_id = str(value.get("asset_id") or "")
+            item = packet_items.get(asset_id)
+            if asset_id in seen or item is None:
+                raise ReviewValidationError(
+                    "quality receipt decisions contain duplicate or unknown assets"
+                )
+            seen.add(asset_id)
+            if (
+                value.get("reviewer") != packet.get("reviewer")
+                or value.get("based_on_hash") != item.get("based_on_hash")
+            ):
+                raise ReviewValidationError("quality receipt decision differs from packet")
+            self._validate_decision(value, targets, line_number)
+            normalized_value = self._normalize_quality_decision(
+                value,
+                accepted=accepted_assets[asset_id],
+                target=targets[asset_id],
+            )
+            self._validate_decision(normalized_value, targets, line_number)
+            normalized.append(normalized_value)
+        if seen != set(packet_items):
+            raise ReviewValidationError(
+                "quality review decisions must cover every packet item exactly once"
+            )
+        self._assert_quality_decisions_are_current(run_id, normalized)
+        result: dict[str, Any] = {
+            "schema_name": "writing_material_quality_review_receipt_reconciliation",
+            "schema_version": QUALITY_REVIEW_RECEIPT_SCHEMA_VERSION,
+            "status": "planned" if dry_run else "success",
+            "run_id": run_id,
+            "packet_fingerprint": packet["artifact_fingerprint"],
+            "decision_count": len(normalized),
+            "decision_counts": dict(
+                sorted(Counter(str(value["decision"]) for value in normalized).items())
+            ),
+            "source_verified": True,
+            "review_events_modified": False,
+            "accepted_snapshot_modified": False,
+            "index_modified": False,
+            "llm_called": False,
+            "writes_performed": False,
+        }
+        if dry_run:
+            result["artifact_fingerprint"] = sha256_json(result)
+            return result
+        if not confirmed:
+            raise ReviewValidationError(
+                "quality receipt reconciliation requires explicit confirmation (--yes)"
+            )
+        receipt = self._write_quality_review_receipt(
+            run_id,
+            packet=packet,
+            decisions_path=decisions_path,
+            decisions=normalized,
+        )
+        result.update(
+            {
+                "quality_review_receipt": receipt,
+                "writes_performed": not bool(receipt.get("reused")),
+            }
+        )
+        result["artifact_fingerprint"] = sha256_json(result)
+        return result
+
+    def quality_acknowledgements(
+        self,
+        run_id: str,
+        *,
+        accepted_manifest_sha256: str,
+    ) -> tuple[set[str], list[str]]:
+        """Return reviewed asset IDs from receipts bound to the current snapshot."""
+
+        receipt_dir = self.run_dir(run_id) / "quality-review-receipts"
+        if not receipt_dir.exists():
+            return set(), []
+        current_manifest = _read_json(self.accepted_dir(run_id) / "manifest.json")
+        targets = self._targets(self._records(self.run_dir(run_id)))
+        acknowledged: set[str] = set()
+        fingerprints: list[str] = []
+        for path in sorted(receipt_dir.glob("*.json")):
+            receipt = _read_json(path)
+            fingerprinted = dict(receipt)
+            fingerprint = fingerprinted.pop("artifact_fingerprint", None)
+            reviewed_assets = receipt.get("reviewed_assets")
+            decision_counts = receipt.get("decision_counts")
+            if (
+                fingerprint != sha256_json(fingerprinted)
+                or receipt.get("schema_name") != "writing_material_quality_review_receipt"
+                or receipt.get("schema_version") != QUALITY_REVIEW_RECEIPT_SCHEMA_VERSION
+                or receipt.get("run_id") != run_id
+                or not isinstance(receipt.get("reviewer"), str)
+                or not str(receipt["reviewer"]).strip()
+                or not isinstance(reviewed_assets, list)
+                or not reviewed_assets
+                or not isinstance(decision_counts, Mapping)
+                or dict(decision_counts)
+                != dict(
+                    sorted(
+                        Counter(str(item.get("decision")) for item in reviewed_assets).items()
+                    )
+                )
+                or any(
+                    not isinstance(item, Mapping)
+                    or not isinstance(item.get("asset_id"), str)
+                    or item.get("decision") not in _DECISIONS
+                    or not isinstance(item.get("based_on_hash"), str)
+                    or item.get("asset_id") not in targets
+                    or item.get("based_on_hash")
+                    != sha256_json(targets[str(item["asset_id"])][1])
+                    for item in reviewed_assets
+                )
+                or len({str(item["asset_id"]) for item in reviewed_assets})
+                != len(reviewed_assets)
+            ):
+                raise ReviewValidationError("quality review receipt is invalid")
+            if (
+                receipt.get("resulting_accepted_manifest_sha256")
+                != accepted_manifest_sha256
+            ):
+                continue
+            if (
+                receipt.get("resulting_review_events_hash")
+                != current_manifest.get("review_events_hash")
+            ):
+                raise ReviewValidationError("quality review receipt event binding is invalid")
+            acknowledged.update(str(item["asset_id"]) for item in reviewed_assets)
+            fingerprints.append(str(fingerprint))
+        return acknowledged, fingerprints
+
+    def _write_quality_review_receipt(
+        self,
+        run_id: str,
+        *,
+        packet: Mapping[str, Any],
+        decisions_path: Path,
+        decisions: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        self._assert_quality_decisions_are_current(run_id, decisions)
+        run_dir = self.run_dir(run_id)
+        accepted_dir = self.accepted_dir(run_id)
+        manifest_path = accepted_dir / "manifest.json"
+        packet_fingerprint = str(packet["artifact_fingerprint"])
+        receipt_dir = run_dir / "quality-review-receipts"
+        receipt_path = receipt_dir / f"{packet_fingerprint}.json"
+        if receipt_path.exists():
+            existing_receipt = _read_json(receipt_path)
+            fingerprinted = dict(existing_receipt)
+            fingerprint = fingerprinted.pop("artifact_fingerprint", None)
+            if fingerprint != sha256_json(fingerprinted):
+                raise ReviewValidationError("existing quality review receipt is invalid")
+            return existing_receipt | {"path": str(receipt_path), "reused": True}
+        receipt: dict[str, Any] = {
+            "schema_name": "writing_material_quality_review_receipt",
+            "schema_version": QUALITY_REVIEW_RECEIPT_SCHEMA_VERSION,
+            "run_id": run_id,
+            "reviewer": packet["reviewer"],
+            "packet_fingerprint": packet_fingerprint,
+            "quality_audit_fingerprint": packet["quality_audit_fingerprint"],
+            "packet_accepted_manifest_sha256": packet["accepted_manifest_sha256"],
+            "decisions_sha256": sha256_text(decisions_path.read_text(encoding="utf-8")),
+            "decision_counts": dict(
+                sorted(Counter(str(value["decision"]) for value in decisions).items())
+            ),
+            "reviewed_assets": sorted(
+                (
+                    {
+                        "asset_id": value["asset_id"],
+                        "decision": value["decision"],
+                        "based_on_hash": value["based_on_hash"],
+                    }
+                    for value in decisions
+                ),
+                key=lambda value: str(value["asset_id"]),
+            ),
+            "resulting_accepted_manifest_sha256": sha256_text(
+                manifest_path.read_text(encoding="utf-8")
+            ),
+            "resulting_review_events_hash": _read_json(manifest_path)["review_events_hash"],
+            "recorded_at": _now(),
+            "evidence_text_included": False,
+            "material_text_included": False,
+            "index_modified": False,
+            "llm_called": False,
+        }
+        receipt["artifact_fingerprint"] = sha256_json(receipt)
+        receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        atomic_write_json(receipt_path, receipt, mode=0o600)
+        return receipt | {"path": str(receipt_path), "reused": False}
+
+    def _assert_quality_decisions_are_current(
+        self,
+        run_id: str,
+        decisions: Sequence[Mapping[str, Any]],
+    ) -> None:
+        events = _read_jsonl(self.run_dir(run_id) / "review-events.jsonl")
+        latest = {str(event["asset_id"]): event for event in events}
+        for value in decisions:
+            event = latest.get(str(value["asset_id"]))
+            expected = {
+                "asset_id": value["asset_id"],
+                "asset_type": event.get("asset_type") if event else None,
+                "decision": value["decision"],
+                "based_on_hash": value["based_on_hash"],
+                "reviewer": str(value["reviewer"]).strip(),
+                "reason": str(value["reason"]).strip(),
+                "edits": dict(value.get("edits") or {}),
+            }
+            if event is None or _semantic_event(event) != expected:
+                raise ReviewValidationError(
+                    "quality receipt decisions are not the latest applied review events"
+                )
 
     def materialize(self, run_id: str, *, allow_partial: bool = False) -> dict[str, Any]:
         run_dir = self.run_dir(run_id)
@@ -579,7 +837,7 @@ class WritingMaterialReviewService:
         run_id: str,
         *,
         packet_path: Path,
-        accepted_manifest_sha256: str,
+        accepted_manifest_sha256: str | None,
     ) -> dict[str, Any]:
         packet = _read_json(packet_path)
         fingerprinted = dict(packet)
@@ -592,7 +850,11 @@ class WritingMaterialReviewService:
             or packet.get("schema_version") != QUALITY_REVIEW_PACKET_SCHEMA_VERSION
             or packet.get("status") != "success"
             or packet.get("run_id") != run_id
-            or packet.get("accepted_manifest_sha256") != accepted_manifest_sha256
+            or (
+                accepted_manifest_sha256 is not None
+                and packet.get("accepted_manifest_sha256") != accepted_manifest_sha256
+            )
+            or not isinstance(packet.get("accepted_manifest_sha256"), str)
             or not isinstance(packet.get("reviewer"), str)
             or not str(packet["reviewer"]).strip()
             or not isinstance(items, list)

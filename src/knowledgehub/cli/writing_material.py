@@ -87,6 +87,12 @@ def add_writing_material_parser(subparsers: Any) -> None:
     apply_quality.add_argument("--decisions", type=Path, required=True)
     apply_quality.add_argument("--dry-run", action="store_true")
     apply_quality.add_argument("--yes", action="store_true")
+    reconcile_quality = review_commands.add_parser("reconcile-quality-receipt")
+    reconcile_quality.add_argument("--run-id", required=True)
+    reconcile_quality.add_argument("--packet", type=Path, required=True)
+    reconcile_quality.add_argument("--decisions", type=Path, required=True)
+    reconcile_quality.add_argument("--dry-run", action="store_true")
+    reconcile_quality.add_argument("--yes", action="store_true")
 
     validate = commands.add_parser("validate")
     validate.add_argument("--run-id", required=True)
@@ -286,7 +292,7 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                         value["accepted_snapshot"]["path"] + "/manifest.json"
                     ),
                 )
-            else:
+            elif args.writing_material_review_command == "apply-quality":
 
                 def operation() -> dict[str, Any]:
                     return review.apply_quality_review(
@@ -320,6 +326,44 @@ def run_writing_material_command(args: argparse.Namespace) -> int:
                         lock_keys=(f"review:writing-materials:{args.run_id}",),
                         output_manifest=lambda value: str(
                             value["accepted_snapshot"]["path"] + "/manifest.json"
+                        ),
+                    )
+            else:
+
+                def operation() -> dict[str, Any]:
+                    return review.reconcile_quality_review_receipt(
+                        args.run_id,
+                        packet_path=args.packet,
+                        decisions_path=args.decisions,
+                        dry_run=args.dry_run,
+                        confirmed=args.yes,
+                    )
+
+                if args.dry_run:
+                    result = operation()
+                else:
+                    result = _executor().execute(
+                        "writing_material_quality_receipt_reconciliation",
+                        operation,
+                        knowledge_base="writing",
+                        version=args.run_id,
+                        inputs={
+                            "run_id": args.run_id,
+                            "operation": "reconcile-quality-receipt",
+                            "packet": str(args.packet.resolve()),
+                            "packet_sha256": sha256_text(
+                                args.packet.read_text(encoding="utf-8")
+                            ),
+                            "decisions": str(args.decisions.resolve()),
+                            "decisions_sha256": sha256_text(
+                                args.decisions.read_text(encoding="utf-8")
+                            ),
+                            "confirmed": args.yes,
+                        },
+                        input_manifest=str(args.decisions.resolve()),
+                        lock_keys=(f"review:writing-materials:{args.run_id}",),
+                        output_manifest=lambda value: str(
+                            value["quality_review_receipt"]["path"]
                         ),
                     )
             _emit(result)

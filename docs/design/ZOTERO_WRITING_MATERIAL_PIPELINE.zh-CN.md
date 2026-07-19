@@ -386,6 +386,8 @@ Retry 使用 prior run 的 selection，但创建新的 immutable run，不覆盖
 
 人工`accepted`表示在知悉finding后保留当前material，不表示确定性quality rule自动通过。若全部flagged items均accepted，post-review audit可以继续`passed=false`，但审核阻塞已经解除；系统必须保留finding与review event两类事实，不能为了闭环静默改写内容或审计结果。
 
+`writing-material-quality-review-receipt-v1`进一步把packet/audit/decisions与结果accepted manifest绑定；`writing-material-quality-audit-v2`分别报告内容`passed`和人工`review_required`。只有与当前manifest匹配的receipt可以确认finding，历史receipt不会跨revision复用；全部确认时仍保留finding，但禁止重复生成同一批审核任务。
+
 ## 15. 测试策略与 MVP 步骤
 
 自动测试覆盖：

@@ -34,6 +34,9 @@ def test_quality_audit_clean_fixture_is_fingerprinted_private_and_read_only(
 
     assert report["status"] == "success"
     assert report["passed"] is True
+    assert report["review_required"] is False
+    assert report["counts"]["acknowledged_flagged_assets"] == 0
+    assert report["counts"]["unreviewed_flagged_assets"] == 0
     assert report["counts"]["assets"]["total"] == 3
     assert report["source_text_included"] is False
     assert report["review_decisions_modified"] is False
@@ -292,8 +295,9 @@ def test_quality_review_import_is_dry_run_first_versioned_and_stale_safe(
     )
     packet_path = Path(packet["packet_path"])
     decision = dict(packet["items"][0]["decision_draft"])
-    decision["decision"] = "edited"
-    decision["reason"] = "remove repeated generated guidance"
+    decision["decision"] = "accepted"
+    decision["reason"] = "retain the known quality finding"
+    decision.pop("edits")
     decisions_path = tmp_path / "quality-decisions.jsonl"
     decisions_path.write_text(json.dumps(decision) + "\n", encoding="utf-8")
     events_before = (run_dir / "review-events.jsonl").read_bytes()
@@ -335,6 +339,9 @@ def test_quality_review_import_is_dry_run_first_versioned_and_stale_safe(
     assert applied["review_events_modified"] is True
     assert applied["accepted_snapshot_modified"] is True
     assert applied["index_modified"] is False
+    receipt_path = Path(applied["quality_review_receipt"]["path"])
+    assert receipt_path.is_file()
+    assert oct(receipt_path.stat().st_mode & 0o777) == "0o600"
     assert second_revision != first_revision
     assert {
         path.name: path.read_bytes() for path in legacy_dir.iterdir() if path.is_file()
@@ -345,12 +352,26 @@ def test_quality_review_import_is_dry_run_first_versioned_and_stale_safe(
     accepted_template = json.loads(
         (second_revision / "templates.jsonl").read_text(encoding="utf-8")
     )
-    assert accepted_template["claim_strength_guidance"].count(repeated_segment) == 1
+    assert accepted_template["claim_strength_guidance"].count(repeated_segment) == 3
     assert accepted_template["constraints"] == ["Keep this prior reviewer constraint."]
     pointer = run_dir / "accepted-current.json"
     assert oct(pointer.stat().st_mode & 0o777) == "0o600"
     assert review.validate(run_id)["index_eligible"] is True
     assert index_root.exists() is index_existed
+    acknowledged = AcceptedCorpusQualityAuditor(review).audit(run_id)
+    assert acknowledged["passed"] is False
+    assert acknowledged["review_required"] is False
+    assert acknowledged["recommendation"] == "quality_findings_acknowledged"
+    assert acknowledged["counts"]["acknowledged_flagged_assets"] == 1
+    assert acknowledged["counts"]["unreviewed_flagged_assets"] == 0
+    assert len(acknowledged["acknowledgement_receipts"]) == 1
+    with pytest.raises(ValueError, match="valid failed quality audit"):
+        AcceptedCorpusQualityReviewRenderer(review).render(
+            run_id,
+            quality_report=acknowledged,
+            reviewer="lengmo",
+            output_dir=tmp_path / "already-acknowledged",
+        )
     with pytest.raises(ReviewValidationError, match="invalid or stale"):
         review.apply_quality_review(
             run_id,
@@ -358,6 +379,30 @@ def test_quality_review_import_is_dry_run_first_versioned_and_stale_safe(
             decisions_path=decisions_path,
             dry_run=True,
         )
+
+    receipt_bytes = receipt_path.read_bytes()
+    receipt_path.unlink()
+    unacknowledged = AcceptedCorpusQualityAuditor(review).audit(run_id)
+    assert unacknowledged["review_required"] is True
+    reconciled_dry_run = review.reconcile_quality_review_receipt(
+        run_id,
+        packet_path=packet_path,
+        decisions_path=decisions_path,
+        dry_run=True,
+    )
+    assert reconciled_dry_run["status"] == "planned"
+    assert reconciled_dry_run["writes_performed"] is False
+    assert not receipt_path.exists()
+    reconciled = review.reconcile_quality_review_receipt(
+        run_id,
+        packet_path=packet_path,
+        decisions_path=decisions_path,
+        confirmed=True,
+    )
+    assert reconciled["status"] == "success"
+    assert reconciled["writes_performed"] is True
+    assert receipt_path.read_bytes() != receipt_bytes
+    assert AcceptedCorpusQualityAuditor(review).audit(run_id)["review_required"] is False
 
 
 def test_quality_review_import_rejects_null_or_incomplete_decisions(tmp_path: Path) -> None:

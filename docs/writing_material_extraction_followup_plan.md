@@ -759,4 +759,21 @@ Phase 7A/7B 已形成闭环。生产 Writing alias 已部署并保留 rollback f
 7. [x] post-accept只读quality audit绑定新manifest，fingerprint `d83d80bb48fce854b0ec69fc93e10c8c090f037e01b6ca8fd68d4ebbb5a1354d`；仍为36 assets/42 findings、`passed=false`，因为全部accept刻意保留了原低分、超长、cluster和重复内容。这是已知风险被人工接受，不是质量规则消失或修复。
 8. [x] 未调用LLM、未处理新文献、未修改evidence、cache、Zotero或Qdrant索引；磁盘alias state仍为active quality-v2/1107。Qdrant服务当时未监听6333，因此未做live collection读回，但本阶段没有执行任何index/release命令。
 
-Phase 8D结论：人工审核任务已完成，状态为`stop_at_acknowledged_quality_findings`。由于36项全部accepted且派生material内容未变，不需要仅为相同内容立即重建生产索引。若未来要求quality audit本身区分“未审核finding”和“已审核接受finding”，应作为独立Phase 8E扩展acknowledgement contract；不得把人工接受改写成`passed=true`。
+Phase 8D结论：人工审核任务已完成，状态为`stop_at_acknowledged_quality_findings`。由于36项全部accepted且派生material内容未变，不需要仅为相同内容立即重建生产索引。quality audit区分“未审核finding”和“已审核接受finding”的acknowledgement contract已由下节Phase 8E完成；人工接受仍不会被改写成`passed=true`。
+
+### Phase 8E：质量finding acknowledgement receipt（2026-07-19）
+
+1. [x] 新增fingerprinted `writing-material-quality-review-receipt-v1`，绑定run、reviewer、原packet/audit、decisions SHA、逐asset decision/hash、结果accepted manifest和review events hash；不包含evidence/material文本，目录0700、文件0600。
+2. [x] 后续`apply-quality --yes`在事件与versioned snapshot成功后自动写receipt；如果receipt写入窗口失败，可用`review reconcile-quality-receipt`在不追加event、不重写accepted的前提下验证并补记。
+3. [x] reconcile要求旧packet fingerprint/结构、36项decisions、raw target hash、reviewer/reason/edits与当前每个asset的latest event语义完全一致；支持零写入`--dry-run`，真实补记另需`--yes`。
+4. [x] quality audit升级为`writing-material-quality-audit-v2`，同时保留内容`passed`和独立`review_required`；报告flagged、acknowledged和unreviewed counts，并为每条finding分列两类asset IDs。历史v1 failed audit仍可用于尚未处理的review packet。
+5. [x] 只有unreviewed assets才进入新的review packet；当内容finding仍存在但全部有当前manifest-bound receipt时，报告`passed=false`、`review_required=false`、recommendation=`quality_findings_acknowledged`，拒绝循环生成新packet。
+6. [x] fixture覆盖自动receipt、权限、accepted风险保留、旧receipt移除后的reconcile dry-run/真实恢复、renderer拒绝全部acknowledged报告、carry-forward edit和CLI parser；定向回归121 passed，全仓544 passed，Ruff和mypy 129 source files通过。
+7. [x] 对真实run先执行reconcile dry-run：planned、36 accepted、零review/accepted/index写入，fingerprint `dda9983852ae49944a529b862e72a21a6581acbe8a319ee0126d08d6ec199908`。
+8. [x] Task `6c1f1915-572b-4b13-8e8e-c13a448809d2` completed并写入receipt；receipt fingerprint `e0d81c46f04e4ccd64e321d8ad196bcfcc1905afe8fe84f4893ae83f6c9dc2b9`，reconcile result fingerprint `3cc44280a96d07cad2efbf3a3a8c944e02ec1768bd99f533479a2f5c4e7facb6`。
+9. [x] 真实v2 audit路径`/tmp/knowledgehub-writing-material-phase6b-20260718/quality-audit-acknowledged-20260719T064746Z-f99463512f16.json`，fingerprint `c89ebb39713ccfc724dfa1dc72121933dafbb1d234f85c68afae8eb07f1a85e5`；36 flagged、36 acknowledged、0 unreviewed、42 findings，`passed=false`但`review_required=false`。
+10. [x] source validation继续`errors=[]`、index_eligible=true；没有调用LLM、没有修改evidence/accepted revision/cache/Zotero/Qdrant或生产alias，也没有执行candidate/release。
+
+实际修改文件：`src/knowledgehub/writing_rag/review.py`、`src/knowledgehub/writing_rag/pilot.py`、`src/knowledgehub/cli/writing_material.py`、`tests/writing_material/test_quality_audit.py`、`tests/writing_material/test_extract_review.py`、本计划、审计补充、设计文档和pilot runbook。
+
+Phase 8E结论：人工质量审核和机器可追踪acknowledgement均已完成。当前没有强制的下一实施阶段；保持30篇pilot和现有production release，不因仅审核元数据变化重建相同material内容。未来若选择实际修复6项重复内容或其他finding，应以新的显式edit/reject决定进入新阶段。

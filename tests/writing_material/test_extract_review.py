@@ -207,6 +207,24 @@ def test_release_and_pilot_cli_commands_keep_explicit_safety_inputs() -> None:
     assert quality_apply.decisions == Path("quality-decisions.jsonl")
     assert quality_apply.dry_run is True
     assert quality_apply.yes is False
+    receipt_reconcile = parser.parse_args(
+        [
+            "writing-material",
+            "review",
+            "reconcile-quality-receipt",
+            "--run-id",
+            "run-1",
+            "--packet",
+            "quality-review-packet.json",
+            "--decisions",
+            "quality-decisions.jsonl",
+            "--dry-run",
+        ]
+    )
+    assert receipt_reconcile.writing_material_review_command == (
+        "reconcile-quality-receipt"
+    )
+    assert receipt_reconcile.dry_run is True
     extraction = parser.parse_args(
         [
             "writing-material",

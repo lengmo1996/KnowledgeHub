@@ -157,7 +157,7 @@ knowledgehub writing-material pilot audit-quality \
   --output /tmp/writing-material-quality-audit.json
 ```
 
-报告采用 `writing-material-quality-audit-v1`，绑定 accepted manifest SHA-256 和自身 artifact fingerprint。报告仅包含 asset ID、字段名、计数和阈值，不复制 evidence 或 material 文本；命令不调用 LLM，不修改 review events、accepted snapshot 或索引。`passed=false` 表示应为 flagged assets 创建显式人工复核决定，不能静默编辑 evidence，也不能直接覆盖当前 accepted snapshot。
+当前报告采用 `writing-material-quality-audit-v2`，绑定 accepted manifest SHA-256、当前manifest-bound review receipts和自身 artifact fingerprint；历史v1 failed报告仍可用于其原始review packet。报告仅包含 asset ID、字段名、计数和阈值，不复制 evidence 或 material 文本；命令不调用 LLM，不修改 review events、accepted snapshot 或索引。`passed`表示内容规则，`review_required`表示是否仍有未审核asset，两者不得混为一谈。
 
 默认 policy：quality score 至少0.75；同一字段片段最多重复2次；受审字段最多800字符；lexical cluster 默认只允许单成员。阈值完整写入报告，调整阈值必须产生新的 fingerprinted report。
 
@@ -198,6 +198,16 @@ knowledgehub writing-material review apply-quality \
 导入会追加review event，并将新complete projection写入`accepted-revisions/rev-.../`；历史`accepted/`和旧revision不覆盖。0600 `accepted-current.json`记录当前revision，所有candidate/release/pilot读取器按review events解析并复验当前snapshot。导入成功后原packet会因accepted manifest SHA变化而失效，必须重新运行quality audit；该命令不创建candidate、不修改索引，也不授权stage/promotion。
 
 如果reviewer对flagged items全部选择`accepted`，重新quality audit仍会报告同样的内容finding并保持`passed=false`，因为内容没有发生edit/reject。这应记录为人工接受已知质量风险；不能篡改阈值或报告使其显示通过，也不应循环复用已stale的旧packet要求重复审核。只有material内容实际变化时，才需要基于新snapshot另行评估candidate/release。
+
+成功的`apply-quality`会自动在run的`quality-review-receipts/`写入0600 receipt。如果事件和snapshot已经成功、但旧版本尚未生成receipt，可先执行恢复预检：
+
+```text
+knowledgehub writing-material review reconcile-quality-receipt \
+  --run-id RUN_ID --packet quality-review-packet.json \
+  --decisions quality-decisions.jsonl --dry-run
+```
+
+只有它证明每条decision与current latest event完全一致后，才可用同一命令加`--yes`补记。reconcile不追加review event、不改accepted或index。receipt绑定当前accepted manifest；后续snapshot变化时旧receipt只作为历史保留，不会错误确认新finding。
 
 ## 5. 默认停止条件
 

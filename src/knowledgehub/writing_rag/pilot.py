@@ -34,7 +34,11 @@ DRY_RUN_REPORT_SCHEMA_VERSION = PILOT_GATE_REPORT_SCHEMA_VERSION
 RETRIEVAL_CASE_SCHEMA_VERSION = "writing-material-retrieval-case-v1"
 RETRIEVAL_REPORT_SCHEMA_VERSION = "writing-material-retrieval-evaluation-v1"
 PROVIDER_PREFLIGHT_SCHEMA_VERSION = "writing-material-provider-preflight-v2"
-QUALITY_AUDIT_SCHEMA_VERSION = "writing-material-quality-audit-v1"
+QUALITY_AUDIT_SCHEMA_VERSION = "writing-material-quality-audit-v2"
+_SUPPORTED_QUALITY_AUDIT_SCHEMA_VERSIONS = {
+    "writing-material-quality-audit-v1",
+    QUALITY_AUDIT_SCHEMA_VERSION,
+}
 
 _QUALITY_TEXT_FIELDS: Mapping[str, tuple[str, ...]] = {
     "strategy": (
@@ -743,6 +747,27 @@ class AcceptedCorpusQualityAuditor:
                 for asset_id in finding.get("asset_ids", ())
             }
         )
+        manifest_sha256 = sha256_text(manifest_path.read_text(encoding="utf-8"))
+        acknowledged_assets, receipt_fingerprints = self.review.quality_acknowledgements(
+            run_id,
+            accepted_manifest_sha256=manifest_sha256,
+        )
+        acknowledged_flagged_assets = sorted(set(flagged_assets) & acknowledged_assets)
+        unreviewed_flagged_assets = sorted(set(flagged_assets) - acknowledged_assets)
+        annotated_findings = [
+            {
+                **finding,
+                "acknowledged_asset_ids": sorted(
+                    set(str(value) for value in finding["asset_ids"])
+                    & acknowledged_assets
+                ),
+                "unreviewed_asset_ids": sorted(
+                    set(str(value) for value in finding["asset_ids"])
+                    - acknowledged_assets
+                ),
+            }
+            for finding in findings
+        ]
         finding_counts = dict(sorted(Counter(str(item["code"]) for item in findings).items()))
         severity_counts = dict(
             sorted(Counter(str(item["severity"]) for item in findings).items())
@@ -766,6 +791,7 @@ class AcceptedCorpusQualityAuditor:
             "no_multi_member_lexical_clusters": "near_duplicate_cluster" not in finding_counts,
         }
         passed = all(gates.values())
+        review_required = bool(unreviewed_flagged_assets)
         report: dict[str, Any] = {
             "schema_name": "writing_material_quality_audit",
             "schema_version": QUALITY_AUDIT_SCHEMA_VERSION,
@@ -773,7 +799,7 @@ class AcceptedCorpusQualityAuditor:
             "passed": passed,
             "run_id": run_id,
             "accepted_manifest": str(manifest_path),
-            "accepted_manifest_sha256": sha256_text(manifest_path.read_text(encoding="utf-8")),
+            "accepted_manifest_sha256": manifest_sha256,
             "policy": asdict(self.policy),
             "counts": {
                 "assets": {**asset_counts, "total": total_assets},
@@ -781,6 +807,8 @@ class AcceptedCorpusQualityAuditor:
                 "findings_total": len(findings),
                 "severities": severity_counts,
                 "flagged_assets": len(flagged_assets),
+                "acknowledged_flagged_assets": len(acknowledged_flagged_assets),
+                "unreviewed_flagged_assets": len(unreviewed_flagged_assets),
                 "multi_member_clusters": len(clusters),
             },
             "metrics": {
@@ -790,9 +818,15 @@ class AcceptedCorpusQualityAuditor:
             },
             "gates": gates,
             "clusters": clusters,
-            "findings": findings,
+            "findings": annotated_findings,
+            "review_required": review_required,
+            "acknowledgement_receipts": receipt_fingerprints,
             "recommendation": (
-                "quality_gate_passed" if passed else "manual_review_flagged_assets"
+                "quality_gate_passed"
+                if passed
+                else "manual_review_flagged_assets"
+                if review_required
+                else "quality_findings_acknowledged"
             ),
             "source_text_included": False,
             "review_decisions_modified": False,
@@ -855,7 +889,13 @@ class AcceptedCorpusQualityReviewRenderer:
         assert isinstance(raw_findings, list)
         for finding in raw_findings:
             assert isinstance(finding, Mapping)
-            for asset_id in finding["asset_ids"]:
+            asset_ids = (
+                finding.get("unreviewed_asset_ids")
+                if quality_report.get("schema_version") == QUALITY_AUDIT_SCHEMA_VERSION
+                else finding.get("asset_ids")
+            )
+            assert isinstance(asset_ids, list)
+            for asset_id in asset_ids:
                 grouped.setdefault(str(asset_id), []).append(dict(finding))
         unknown = sorted(set(grouped) - set(accepted_assets))
         if unknown:
@@ -1349,6 +1389,7 @@ def _validate_quality_audit_report(
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("quality audit policy is invalid") from exc
     findings = value.get("findings")
+    schema_version = value.get("schema_version")
     counts = value.get("counts")
     counts_mapping = counts if isinstance(counts, Mapping) else {}
     finding_counts = counts_mapping.get("findings")
@@ -1363,6 +1404,16 @@ def _validate_quality_audit_report(
             and isinstance(item.get("asset_ids"), list)
             and bool(item.get("asset_ids"))
             and all(isinstance(asset_id, str) and asset_id for asset_id in item["asset_ids"])
+            and (
+                schema_version != QUALITY_AUDIT_SCHEMA_VERSION
+                or (
+                    isinstance(item.get("acknowledged_asset_ids"), list)
+                    and isinstance(item.get("unreviewed_asset_ids"), list)
+                    and set(item["acknowledged_asset_ids"])
+                    | set(item["unreviewed_asset_ids"])
+                    == set(item["asset_ids"])
+                )
+            )
             for item in findings
         )
         and isinstance(finding_counts, Mapping)
@@ -1372,12 +1423,16 @@ def _validate_quality_audit_report(
     )
     if (
         value.get("schema_name") != "writing_material_quality_audit"
-        or value.get("schema_version") != QUALITY_AUDIT_SCHEMA_VERSION
+        or schema_version not in _SUPPORTED_QUALITY_AUDIT_SCHEMA_VERSIONS
         or value.get("status") != "success"
         or value.get("passed") is not False
         or value.get("run_id") != run_id
         or value.get("accepted_manifest_sha256") != accepted_manifest_sha256
         or value.get("recommendation") != "manual_review_flagged_assets"
+        or (
+            schema_version == QUALITY_AUDIT_SCHEMA_VERSION
+            and value.get("review_required") is not True
+        )
         or value.get("source_text_included") is not False
         or value.get("review_decisions_modified") is not False
         or value.get("accepted_snapshot_modified") is not False
