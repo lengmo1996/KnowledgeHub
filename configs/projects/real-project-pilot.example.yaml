@@ -1,0 +1,29 @@
+schema_version: "3.0"
+workspace_id: my-private-project
+name: My Private Project
+description: Read-only V3 real-project pilot
+workspace_type: project
+data_scope: private
+status: active
+research:
+  question: Replace with the real research question.
+  hypotheses:
+    - Replace with a falsifiable project hypothesis.
+repositories:
+  - repository_id: primary-repository
+    role: primary
+    path: .
+environments:
+  default: my-private-project
+knowledge:
+  literature:
+    namespace: production-literature
+    filters: {}
+  code:
+    namespace: production-code
+    filters: {}
+  writing:
+    namespace: production-writing
+    filters: {}
+created_at: "2026-07-20T00:00:00+00:00"
+updated_at: "2026-07-20T00:00:00+00:00"

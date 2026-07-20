@@ -104,7 +104,7 @@ TOOL_DESCRIPTIONS = {
     "knowledge_compare_symbols": "Compare one Python symbol across two indexed library versions.",
     "knowledge_analyze_repository": "Statically inspect an allowed local repository without executing or modifying it.",
     "knowledge_submit_feedback": "Record explicit quality feedback for one derived writing pattern.",
-    "knowledge_project_query": "Build budgeted project context and route read-only fixture knowledge evidence by task.",
+    "knowledge_project_query": "Build budgeted project context and route read-only Workspace-scoped knowledge evidence by task.",
     "knowledge_project_skill": "Run a read-only project debugging, result-analysis, decision-review, or academic-writing workflow.",
 }
 
@@ -526,21 +526,24 @@ class ToolRegistry:
 
     async def _project_query(self, value: Any) -> dict[str, Any]:
         from knowledgehub.project.context import ProjectContextBuilder
-        from knowledgehub.project.knowledge import FixtureKnowledgeRouter, ProjectQueryService
+        from knowledgehub.project.knowledge import build_project_query_service
         from knowledgehub.project.models import ContextBudget
         from knowledgehub.project.registry import ProjectRegistry
 
         state_root = Path(os.environ.get("KH_PROJECT_STATE_ROOT", "state/fixtures"))
         fixture_root = Path(
-            os.environ.get(
-                "KH_PROJECT_FIXTURE_ROOT", "fixtures/v3/fixture_vision_project"
-            )
+            os.environ.get("KH_PROJECT_FIXTURE_ROOT", "fixtures/v3/fixture_vision_project")
         )
+        hub_config = Path(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
 
         def query() -> dict[str, Any]:
-            registry = ProjectRegistry(state_root)
-            service = ProjectQueryService(
-                ProjectContextBuilder(registry), FixtureKnowledgeRouter(fixture_root)
+            registry = ProjectRegistry(state_root, read_only=True)
+            builder = ProjectContextBuilder(registry)
+            service = build_project_query_service(
+                builder,
+                value.workspace_id,
+                fixture_root=fixture_root,
+                hub_config=hub_config,
             )
             return service.query(
                 value.workspace_id,
@@ -562,21 +565,24 @@ class ToolRegistry:
 
     async def _project_skill(self, value: Any) -> dict[str, Any]:
         from knowledgehub.project.context import ProjectContextBuilder
-        from knowledgehub.project.knowledge import FixtureKnowledgeRouter, ProjectQueryService
+        from knowledgehub.project.knowledge import build_project_query_service
         from knowledgehub.project.registry import ProjectRegistry
         from knowledgehub.project.skills import ProjectSkillService
 
         state_root = Path(os.environ.get("KH_PROJECT_STATE_ROOT", "state/fixtures"))
         fixture_root = Path(
-            os.environ.get(
-                "KH_PROJECT_FIXTURE_ROOT", "fixtures/v3/fixture_vision_project"
-            )
+            os.environ.get("KH_PROJECT_FIXTURE_ROOT", "fixtures/v3/fixture_vision_project")
         )
+        hub_config = Path(os.environ.get("KH_HUB_CONFIG", "configs/knowledgehub.yaml"))
 
         def run_skill() -> dict[str, Any]:
-            registry = ProjectRegistry(state_root)
-            query_service = ProjectQueryService(
-                ProjectContextBuilder(registry), FixtureKnowledgeRouter(fixture_root)
+            registry = ProjectRegistry(state_root, read_only=True)
+            builder = ProjectContextBuilder(registry)
+            query_service = build_project_query_service(
+                builder,
+                value.workspace_id,
+                fixture_root=fixture_root,
+                hub_config=hub_config,
             )
             return ProjectSkillService(registry, query_service).run(
                 value.skill,

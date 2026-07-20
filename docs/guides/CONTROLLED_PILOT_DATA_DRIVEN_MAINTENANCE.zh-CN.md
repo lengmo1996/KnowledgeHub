@@ -1,6 +1,6 @@
 # 私有真实项目受控试运行与数据驱动维护手册
 
-状态：**项目准备期；真实 Workspace Gate F 尚未启用**
+状态：**Gate F 已实现；等待 Gate G 运行时路径与权限门槛**
 
 适用对象：私有科研项目、项目所有者与 Codex 协作
 
@@ -10,19 +10,20 @@
 
 ## 0. 你的当前场景：先完成第 0～6 步
 
-如果你刚在 NAS 挂载路径创建 `/home/lengmo/codebase/base_init_repo`，暂时不要从头通读四周流程，也不要运行 Workspace、Context、Query 或 Skill 命令。先确认 NAS 路径能否作为 Git 工作目录；不能时改用本地私有工作副本。
+对 `/home/lengmo/codebase/base_init_repo` 开始 Pilot 前，先确认 NAS 路径和独立状态根的当前挂载状态。Gate F 已实现，但 Gate G 仍要求状态根可写并通过路径门禁。
 
-2026-07-17 的只读检查结果是：
+2026-07-20 的只读复核结果是：
 
 | 检查项 | 当前状态 | 是否可开始 Pilot |
 |---|---|---|
-| 目录 | 存在，但为空 | 否 |
-| 挂载 | NFSv4，当前为 `ro` | 否，不能写文件或初始化 Git |
+| 目录 | 存在，包含真实项目文件 | 是，可做只读接入 |
+| 挂载 | NFSv4，当前为 `ro` | 只适合只读 Pilot，不适合作为活动开发工作区 |
 | 锁参数 | `local_lock=none` | 不建议直接作为活动 Git 工作目录 |
-| Git | 不是 Git 仓库，没有首个 commit | 否 |
+| Git | `main`，已有首个 commit，复核时 clean | 是 |
 | 权限显示 | `777 nobody:nogroup` | 由 NAS/NFS 映射产生，不在客户端修改 |
-| 研究问题和代码 | 尚不存在 | 否 |
-| Gate F | 当前 KnowledgeHub 尚未实现 | 否 |
+| 研究问题和代码 | 已存在；内容边界仍由项目所有者确认 | 待所有者确认 |
+| 独立状态根 | `700 lengmo:lengmo`，但 `/data` 当前为 `ro` | 否，不能 create/archive |
+| Gate F | 已实现显式真实项目 opt-in 和只读 Router | 是 |
 
 先完成第 0 步确认，再依次完成第 1～6 步。除此之外暂时不要执行后面的 Pilot 操作。
 
@@ -326,18 +327,18 @@ printf 'project=%s\nid=%s\nstate=%s\nreports=%s\n' \
   "$KH_PILOT_REPO" "$KH_PILOT_ID" "$KH_PILOT_STATE" "$KH_PILOT_REPORTS"
 ```
 
-### 第 6 步：明确当前停止点
+### 第 6 步：明确当前运行时停止点
 
 做到这里后：
 
 - 可以继续第 4 节建立私有状态和报告目录；
 - 可以执行第 5 节 KnowledgeHub Day 0 基线；
-- 然后把第 6.2 节 Gate F 实施任务交给 Codex；
-- **不能**创建真实 Workspace；
+- 检查第 6.1～6.3 节 Gate F 验收；
+- 状态根不可写时，**不能**创建真实 Workspace；
 - **不能**开始四周计时；
 - **不能**执行 Project Context、Query、Skill 或 MCP 真实项目调用。
 
-Gate F 验收通过后，才进入四周第 1 周。最短路径是：
+Gate F 和 Gate G 运行时门槛通过后，才进入四周第 1 周。最短路径是：
 
 ```text
 确认 NAS 当前只读，选择本地工作副本
@@ -346,7 +347,7 @@ Gate F 验收通过后，才进入四周第 1 周。最短路径是：
 → 首个提交且工作区干净
 → 建立私有状态/报告目录
 → Day 0 基线全绿
-→ Codex 实现 Gate F
+→ 验证 Gate F
 → 创建并验证真实 Workspace
 → 开始四周第 1 周
 ```
@@ -361,8 +362,9 @@ Gate F 验收通过后，才进入四周第 1 周。最短路径是：
 4. 只在回归证据充分时提出候选发布建议；
 5. 保持正式 collection、alias、数据库、原始文档和用户项目可恢复。
 
-当前代码仍是 Fixture-only：`knowledgehub workspace create --help` 没有
-`--allow-real-project`，项目 Query/Skill 仍不能安全接入真实 Workspace。因此，真实项目可以先创建，现有三库也可以先做只读基线检查，但四周 Pilot **不得开始计时**，且不得执行 Gate G～J，直到第 6 节 Gate F 完成。
+当前代码已提供 `knowledgehub workspace create --allow-real-project`，真实 Project Query/Skill
+使用正式只读 Hub Router。不过四周 Pilot **不得开始计时**，且不得执行 Gate G～J，直到
+独立状态根实际可写、配置通过 Schema 和路径检查，并完成第 6.3 节验收。
 
 ## 2. 命令分级和职责
 
@@ -568,7 +570,7 @@ sha256sum "$KH_PILOT_REPORTS/baseline/"*.json
 
 ## 6. Gate F：启用真实项目支持
 
-### 6.1 当前必须停止的位置
+### 6.1 Gate F 接口检查
 
 **[R]** 检查目标参数：
 
@@ -576,9 +578,9 @@ sha256sum "$KH_PILOT_REPORTS/baseline/"*.json
 "$KH_BIN" workspace create --help | rg -- '--allow-real-project'
 ```
 
-当前版本预期无输出并返回非零；这表示 Gate F 尚未实现。此时不得尝试创建真实 Workspace，也不得对真实项目执行 `project context/query/skill`。
+当前版本必须显示该参数。无输出或返回非零表示 Gate F 回归，此时不得尝试创建真实 Workspace，也不得对真实项目执行 `project context/query/skill`。
 
-### 6.2 交给 Codex 的实施任务
+### 6.2 Gate F 维护任务
 
 真实项目已有首个提交后，将下面整段交给 Codex，并替换三个占位值：
 
@@ -619,7 +621,8 @@ Workspace ID：<KH_PILOT_ID>
 - pytest、Ruff、strict MyPy 和 `git diff --check` 全部通过；
 - [真实项目 Pilot 手册](REAL_PROJECT_PILOT.zh-CN.md)已同步为实际接口。
 
-Gate F 通过后，从详细手册 Gate G 创建和验证 Workspace。Gate G～J 命令属于 **[TARGET]**，在接口实际出现前不得从任何文档复制执行。
+Gate F 通过后，从详细手册 Gate G 创建和验证 Workspace。只有 CLI 参数、状态根写权限和
+路径门禁同时通过后，才执行 Gate G～J。
 
 ## 7. 四周受控试运行
 

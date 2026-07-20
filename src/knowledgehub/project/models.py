@@ -62,6 +62,10 @@ class Workspace:
     schema_version: str = SCHEMA_VERSION
     record_type: ClassVar[str] = "workspace"
 
+    @staticmethod
+    def validate_id(value: str) -> None:
+        _require_id(value, "workspace_id")
+
     def __post_init__(self) -> None:
         _require_schema(self.schema_version)
         _require_id(self.workspace_id, "workspace_id")
@@ -69,6 +73,12 @@ class Workspace:
             raise ValueError("workspace_type must be fixture or project")
         if self.workspace_type == "fixture" and self.data_scope != "test":
             raise ValueError("fixture workspace must use data_scope=test")
+        if self.workspace_type == "project" and self.data_scope not in {"private", "project"}:
+            raise ValueError("project workspace must use data_scope=private or project")
+        if self.workspace_type == "fixture" and not self.workspace_id.startswith("fixture-"):
+            raise ValueError("fixture workspace_id must start with fixture-")
+        if self.workspace_type == "project" and self.workspace_id.startswith("fixture-"):
+            raise ValueError("project workspace_id must not start with fixture-")
         if self.status not in WORKSPACE_STATUSES:
             raise ValueError(f"unsupported workspace status: {self.status}")
         repository_ids: set[str] = set()
@@ -84,8 +94,17 @@ class Workspace:
             if not isinstance(scope, Mapping):
                 raise ValueError(f"missing knowledge scope: {base}")
             namespace = str(scope.get("namespace") or "")
+            if not namespace:
+                raise ValueError(f"{base} namespace cannot be empty")
             if self.workspace_type == "fixture" and not namespace.startswith("fixture-"):
                 raise ValueError(f"fixture {base} namespace must start with fixture-")
+            if self.workspace_type == "project" and namespace.startswith("fixture-"):
+                raise ValueError(f"project {base} namespace must not start with fixture-")
+            if scope.get("write_target"):
+                raise ValueError(f"{base} must not define a write target")
+            filters = scope.get("filters", {})
+            if not isinstance(filters, Mapping):
+                raise ValueError(f"{base} filters must be a mapping")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

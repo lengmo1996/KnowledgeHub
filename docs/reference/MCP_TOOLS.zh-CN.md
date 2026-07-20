@@ -89,10 +89,11 @@ HMAC key、上游 API key 或原始异常内容。
 ## V3 项目工具
 
 - `knowledge_project_query`：按 project_overview、code_debugging、experiment_analysis、
-  decision_review 或 academic_writing 构建预算化 Workspace 上下文，并只读路由 Fixture
-  Literature/Code/Writing 证据；
+  decision_review 或 academic_writing 构建预算化 Workspace 上下文；Fixture 使用隔离的
+  离线证据，真实 Project 使用正式 Hub Router 和 Workspace filters；
 - `knowledge_project_skill`：执行只读的 code-debugging、research-result-analysis、
   research-decision-review 或 writing-academic 项目工作流，不修改 Workspace、实验或源码。
 
 状态根与 Fixture 根只由服务端 `KH_PROJECT_STATE_ROOT` 和 `KH_PROJECT_FIXTURE_ROOT` 配置；调用方
-不能传入路径。两项工具都拒绝未知字段并受 MCP 最终响应大小限制。
+不能传入路径。MCP 以只读 Registry 加载状态根；未知 Workspace、路径穿越、Fixture/Project
+namespace 交叉均 fail-closed。两项工具都拒绝未知字段并受 MCP 最终响应大小限制。

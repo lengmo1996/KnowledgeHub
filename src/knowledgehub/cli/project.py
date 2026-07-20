@@ -12,7 +12,7 @@ import yaml
 from knowledgehub.core.atomic import atomic_write_json
 from knowledgehub.project.context import ProjectContextBuilder
 from knowledgehub.project.fixture import FixtureOrchestrator
-from knowledgehub.project.knowledge import FixtureKnowledgeRouter, ProjectQueryService
+from knowledgehub.project.knowledge import build_project_query_service
 from knowledgehub.project.models import ContextBudget, Workspace
 from knowledgehub.project.registry import ProjectRegistry
 from knowledgehub.project.skills import ProjectSkillService
@@ -27,6 +27,12 @@ def add_project_parsers(subparsers: Any) -> None:
     workspace_commands = workspace.add_subparsers(dest="workspace_command", required=True)
     create = workspace_commands.add_parser("create")
     create.add_argument("config", type=Path)
+    create.add_argument("--repository-root", type=Path)
+    create.add_argument(
+        "--allow-real-project",
+        action="store_true",
+        help="Explicitly allow a read-only real project after path and permission checks",
+    )
     listing = workspace_commands.add_parser("list")
     listing.add_argument("--include-fixtures", action="store_true")
     show = workspace_commands.add_parser("show")
@@ -62,10 +68,20 @@ def add_project_parsers(subparsers: Any) -> None:
     project_commands = project.add_subparsers(dest="project_command", required=True)
     context = project_commands.add_parser("context")
     context.add_argument("workspace_id")
-    context.add_argument("task", choices=tuple(sorted({
-        "project_overview", "code_debugging", "experiment_analysis", "decision_review",
-        "academic_writing",
-    })))
+    context.add_argument(
+        "task",
+        choices=tuple(
+            sorted(
+                {
+                    "project_overview",
+                    "code_debugging",
+                    "experiment_analysis",
+                    "decision_review",
+                    "academic_writing",
+                }
+            )
+        ),
+    )
     context.add_argument("--experiment-id", action="append", default=[])
     context.add_argument("--max-records", type=int, default=20)
     context.add_argument("--max-characters", type=int, default=12_000)
@@ -76,16 +92,28 @@ def add_project_parsers(subparsers: Any) -> None:
     query.add_argument("task")
     query.add_argument("query")
     query.add_argument("--experiment-id", action="append", default=[])
-    query.add_argument("--fixture-root", type=Path, default=Path("fixtures/v3/fixture_vision_project"))
+    query.add_argument(
+        "--fixture-root", type=Path, default=Path("fixtures/v3/fixture_vision_project")
+    )
+    query.add_argument("--hub-config", type=Path, default=Path("configs/knowledgehub.yaml"))
     skill = project_commands.add_parser("skill")
-    skill.add_argument("skill", choices=(
-        "code-debugging", "research-result-analysis", "research-decision-review", "writing-academic"
-    ))
+    skill.add_argument(
+        "skill",
+        choices=(
+            "code-debugging",
+            "research-result-analysis",
+            "research-decision-review",
+            "writing-academic",
+        ),
+    )
     skill.add_argument("workspace_id")
     skill.add_argument("--experiment-id", action="append", default=[])
     skill.add_argument("--section", default="Results")
     skill.add_argument("--writing-function", default="experimental_comparison")
-    skill.add_argument("--fixture-root", type=Path, default=Path("fixtures/v3/fixture_vision_project"))
+    skill.add_argument(
+        "--fixture-root", type=Path, default=Path("fixtures/v3/fixture_vision_project")
+    )
+    skill.add_argument("--hub-config", type=Path, default=Path("configs/knowledgehub.yaml"))
     for parser in (context, query, skill):
         _state(parser)
 
@@ -96,7 +124,13 @@ def run_project_command(args: argparse.Namespace) -> int:
         if args.source == "workspace":
             if args.workspace_command == "create":
                 raw = yaml.safe_load(args.config.read_text(encoding="utf-8"))
-                return _emit(registry.create(Workspace.from_dict(raw)))
+                return _emit(
+                    registry.create(
+                        Workspace.from_dict(raw),
+                        allow_real_project=args.allow_real_project,
+                        repository_root=args.repository_root,
+                    )
+                )
             if args.workspace_command == "list":
                 return _emit(
                     {"workspaces": registry.list_workspaces(include_fixtures=args.include_fixtures)}
@@ -133,23 +167,31 @@ def run_project_command(args: argparse.Namespace) -> int:
                 include_paper_fragments=args.include_paper_fragments,
             )
             return _emit(builder.build(args.workspace_id, args.task, budget=budget))
-        router = FixtureKnowledgeRouter(args.fixture_root)
-        query_service = ProjectQueryService(builder, router)
-        if args.project_command == "query":
-            return _emit(query_service.query(
-                args.workspace_id,
-                args.task,
-                args.query,
-                experiment_ids=tuple(args.experiment_id),
-            ))
-        return _emit(ProjectSkillService(registry, query_service).run(
-            args.skill,
+        query_service = build_project_query_service(
+            builder,
             args.workspace_id,
-            experiment_ids=tuple(args.experiment_id),
-            section=args.section,
-            writing_function=args.writing_function,
-        ))
-    except (FileNotFoundError, KeyError, PermissionError, ValueError) as exc:
+            fixture_root=args.fixture_root,
+            hub_config=args.hub_config,
+        )
+        if args.project_command == "query":
+            return _emit(
+                query_service.query(
+                    args.workspace_id,
+                    args.task,
+                    args.query,
+                    experiment_ids=tuple(args.experiment_id),
+                )
+            )
+        return _emit(
+            ProjectSkillService(registry, query_service).run(
+                args.skill,
+                args.workspace_id,
+                experiment_ids=tuple(args.experiment_id),
+                section=args.section,
+                writing_function=args.writing_function,
+            )
+        )
+    except (KeyError, OSError, TypeError, ValueError) as exc:
         _emit({"error": str(exc), "error_type": type(exc).__name__})
         return 2
 

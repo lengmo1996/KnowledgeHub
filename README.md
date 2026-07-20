@@ -53,16 +53,17 @@ protocol without changing stored entries.
 See [Code RAG](docs/code_rag.md), [Writing RAG](docs/writing_rag.md),
 [data sources](docs/data_sources.md), and [Skill integration](docs/skill_integration.md).
 
-## V3 project workspace fixture
+## V3 project workspaces
 
-V3 validates the project Workspace and experiment-knowledge loop with the isolated
-`fixture-vision-project`. The real-project Pilot is intentionally deferred until a suitable
-research repository exists. Use the
+V3 validates the experiment-knowledge loop with the isolated `fixture-vision-project` and
+provides a fail-closed, read-only Gate F for private real projects. Real Workspace creation
+requires `--allow-real-project`, an independent private state root and an explicit repository
+root; the default remains Fixture-only. Use the
 [controlled Pilot and data-driven maintenance guide](docs/guides/CONTROLLED_PILOT_DATA_DRIVEN_MAINTENANCE.zh-CN.md)
 to prepare a private project, establish the four-week operating baseline and collect evidence.
 When the project is ready, follow the gated, read-only procedure in
 [the Chinese real-project Pilot guide](docs/guides/REAL_PROJECT_PILOT.zh-CN.md); do not point a
-real repository at `state/fixtures` or the fixture-only project router.
+real repository at `state/fixtures` or a formal knowledge-base data directory.
 
 ## V2 release
 

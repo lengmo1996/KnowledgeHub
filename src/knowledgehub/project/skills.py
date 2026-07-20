@@ -40,6 +40,7 @@ class ProjectSkillService:
         return self._writing(workspace_id, section, writing_function)
 
     def _debug(self, workspace_id: str, experiment_ids: tuple[str, ...]) -> dict[str, Any]:
+        workspace_type = self.registry.get(workspace_id)["workspace_type"]
         experiments = self._experiments(workspace_id, experiment_ids)
         failed = [item for item in experiments if item["status"] == "failed"]
         failures = self.registry.list_records(workspace_id, "failure")
@@ -61,15 +62,21 @@ class ProjectSkillService:
             ],
             "suggested_changes": [item["working_solution"] for item in confirmed],
             "confidence": "high" if confirmed else "low",
-            "warnings": ["fixture_only", "no_source_was_modified"],
+            "warnings": (
+                ["fixture_only", "no_source_was_modified"]
+                if workspace_type == "fixture"
+                else ["read_only_real_project", "no_source_was_modified"]
+            ),
         }
 
     def _analysis(self, workspace_id: str, experiment_ids: tuple[str, ...]) -> dict[str, Any]:
+        workspace_type = self.registry.get(workspace_id)["workspace_type"]
         experiments = self._experiments(workspace_id, experiment_ids)
         completed = [item for item in experiments if item["status"] == "completed"]
-        comparable = len({item["environment_id"] for item in completed}) <= 1 and len(
-            {item["git_commit"] for item in completed}
-        ) <= 1
+        comparable = (
+            len({item["environment_id"] for item in completed}) <= 1
+            and len({item["git_commit"] for item in completed}) <= 1
+        )
         observations = [
             {
                 "experiment_id": item["experiment_id"],
@@ -85,33 +92,61 @@ class ProjectSkillService:
             "skill": "research-result-analysis",
             "aligned_experiments": observations,
             "comparable_environment_and_commit": comparable,
-            "supported_conclusions": [
-                "Only comparisons directly represented by fixture Experiment metrics are supportable."
-            ],
-            "unsupported_conclusions": [
-                "Generalization to real image datasets or other seeds is unsupported."
-            ],
-            "confounders": ["single synthetic generator", "single seed", "CPU timing noise"],
-            "next_experiments": ["repeat both fusion variants with additional fixed seeds"],
-            "warnings": ["fixture_results_are_not_academic_findings"],
+            "supported_conclusions": (
+                [
+                    "Only comparisons directly represented by fixture Experiment metrics are supportable."
+                ]
+                if workspace_type == "fixture"
+                else ["Only conclusions linked to recorded project evidence are supportable."]
+            ),
+            "unsupported_conclusions": (
+                ["Generalization to real image datasets or other seeds is unsupported."]
+                if workspace_type == "fixture"
+                else ["Claims without recorded project evidence remain unsupported."]
+            ),
+            "confounders": (
+                ["single synthetic generator", "single seed", "CPU timing noise"]
+                if workspace_type == "fixture"
+                else []
+            ),
+            "next_experiments": (
+                ["repeat both fusion variants with additional fixed seeds"]
+                if workspace_type == "fixture"
+                else []
+            ),
+            "warnings": (
+                ["fixture_results_are_not_academic_findings"]
+                if workspace_type == "fixture"
+                else ["read_only_real_project", "missing_records_remain_unverified"]
+            ),
         }
 
     def _decision(self, workspace_id: str) -> dict[str, Any]:
+        workspace_type = self.registry.get(workspace_id)["workspace_type"]
         decisions = self.registry.list_records(workspace_id, "decision")
         claims = self.registry.list_records(workspace_id, "claim")
         return {
             "skill": "research-decision-review",
             "decisions": decisions,
             "still_supported": all(item["status"] == "accepted" for item in decisions),
-            "missing_evidence": ["multiple seeds", "real dataset validation"],
+            "missing_evidence": (
+                ["multiple seeds", "real dataset validation"]
+                if workspace_type == "fixture"
+                else ([] if claims else ["recorded project claims"])
+            ),
             "counter_evidence": [
                 item for item in claims if item["status"] in {"contradicted", "invalidated"}
             ],
-            "current_impact": "The decision applies only to the fixture default configuration.",
+            "current_impact": (
+                "The decision applies only to the fixture default configuration."
+                if workspace_type == "fixture"
+                else "No impact is inferred beyond the recorded project scope."
+            ),
             "reassessment_needed": True,
         }
 
     def _writing(self, workspace_id: str, section: str, writing_function: str) -> dict[str, Any]:
+        workspace_type = self.registry.get(workspace_id)["workspace_type"]
         claims = self.registry.list_records(workspace_id, "claim")
         evidence = self.query_service.query(
             workspace_id,
@@ -123,18 +158,33 @@ class ProjectSkillService:
             "section": section,
             "writing_function": writing_function,
             "claims": claims,
-            "writing_plan": [
-                "Label the study as a controlled KnowledgeHub fixture.",
-                "State only values resolved from linked Experiment metric pointers.",
-                "Compare the two fusion configurations before discussing complexity.",
-                "Close with the synthetic-data and single-seed limitations.",
-            ],
+            "writing_plan": (
+                [
+                    "Label the study as a controlled KnowledgeHub fixture.",
+                    "State only values resolved from linked Experiment metric pointers.",
+                    "Compare the two fusion configurations before discussing complexity.",
+                    "Close with the synthetic-data and single-seed limitations.",
+                ]
+                if workspace_type == "fixture"
+                else [
+                    "State only claims supported by recorded project evidence.",
+                    "Mark missing experimental evidence as unverified.",
+                    "Adapt retrieved patterns without copying source sentences.",
+                ]
+            ),
             "patterns": evidence["knowledge_evidence"].get("writing", {}),
             "sources": evidence["sources"],
-            "warnings": [
-                "fixture_results_must_not_be_presented_as_real_research",
-                "pattern_adaptation_only_no_source_sentence_copying",
-            ],
+            "warnings": (
+                [
+                    "fixture_results_must_not_be_presented_as_real_research",
+                    "pattern_adaptation_only_no_source_sentence_copying",
+                ]
+                if workspace_type == "fixture"
+                else [
+                    "read_only_real_project",
+                    "pattern_adaptation_only_no_source_sentence_copying",
+                ]
+            ),
         }
 
     def _experiments(
@@ -145,4 +195,3 @@ class ProjectSkillService:
             selected = set(experiment_ids)
             values = [item for item in values if item["experiment_id"] in selected]
         return values
-

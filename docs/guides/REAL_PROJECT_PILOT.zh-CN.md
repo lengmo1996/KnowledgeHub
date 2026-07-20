@@ -1,8 +1,8 @@
 # KnowledgeHub V3 真实科研项目 Pilot 逐步实施手册
 
-状态：**等待真实项目（DEFERRED_NO_REAL_PROJECT）**  
+状态：**Gate F 已实现；Gate G 仍需通过运行时路径与权限检查**
 适用基线：KnowledgeHub commit `129272a` 或其后继版本  
-最后核对日期：2026-07-17
+最后核对日期：2026-07-20
 
 ## 1. 目的和当前边界
 
@@ -13,23 +13,13 @@
 - 真实 Workspace、项目上下文和 MCP 项目工具能否在独立状态根中工作；
 - 全程不修改项目源码、不执行训练、不写正式向量索引、不删除任何项目数据。
 
-当前 V3 实现仍有一个必须诚实保留的门禁：
+Gate F 现在提供显式真实项目 opt-in。Fixture 默认值和 Experiment Schema 仍保持
+Fixture-only；真实 Workspace 只允许 `workspace_type: project` 与
+`data_scope: private|project`。Project Query/Skill 按 Workspace 类型选择 Router：Fixture
+继续使用 `FixtureKnowledgeRouter`，真实项目只能使用正式 `HubQueryService` 的只读 Router。
 
-- `ProjectRegistry.create()` 只接受 `workspace_type: fixture`；
-- Experiment Schema 只接受 `experiment_type: fixture`、`data_scope: test`；
-- `knowledgehub project query/skill` 和 MCP 项目工具使用 `FixtureKnowledgeRouter`；
-- 默认项目状态根是 `state/fixtures`。
-
-因此，在完成第 8 节“真实 Pilot 支持启用”之前，**不得**对真实项目执行下面这些命令：
-
-```bash
-knowledgehub workspace create ...
-knowledgehub project context ...
-knowledgehub project query ...
-knowledgehub project skill ...
-```
-
-这不是故障，而是 V3 第一轮的安全边界。第 2～7 节使用当前版本已经存在的只读能力，可以在真实项目出现后立即执行；第 8 节是一次明确的代码门禁；第 9～12 节只能在门禁通过后执行。
+这不自动放行 Gate G。真实 Workspace 创建仍必须同时提供 `--allow-real-project`、独立
+`--state-root` 和固定 `--repository-root`，并通过路径、所有权、权限和 namespace 检查。
 
 ## 2. Pilot 目录和变量
 
@@ -291,7 +281,7 @@ Writing 结果只能作为结构和表达模式，不是项目实验事实。
 
 ## 8. Gate F：启用真实 Pilot 支持（一次性代码门禁）
 
-当前 `129272a` 基线到这里必须停止。真实项目建立后，把下面整段作为新的 Codex 实施任务；其中路径和 ID 使用第 2 节的真实值：
+Gate F 已由本节定义的门禁实现。后继修改必须保留以下约束：
 
 ```text
 基于 docs/guides/REAL_PROJECT_PILOT.zh-CN.md，为当前真实项目启用 V3 只读 Pilot。
@@ -313,7 +303,7 @@ Workspace ID：<KH_PILOT_ID>
 11. 先给出变更清单，实施后运行 pytest、Ruff、MyPy，并输出可复制的发布和回滚命令。
 ```
 
-该实施任务必须产生一个新的提交。记下提交 ID：
+Gate F 变更通过验收后记下提交 ID：
 
 ```bash
 git -C /home/lengmo/KnowledgeHub log -1 --oneline
@@ -338,7 +328,7 @@ git -C /home/lengmo/KnowledgeHub log -1 --oneline
 
 ## 9. Gate G：创建真实 Workspace
 
-本节命令是 Gate F 应当提供的目标接口。**当前 `129272a` 不支持；只有 `knowledgehub workspace create --help` 已显示 `--allow-real-project` 后才能执行。**
+只有 `knowledgehub workspace create --help` 已显示 `--allow-real-project`，且状态根实际可写时才能执行本节。
 
 先确认接口：
 
@@ -393,6 +383,7 @@ updated_at: "<UTC ISO-8601>"
 ```bash
 "$KH_BIN" workspace create "$KH_PILOT_STATE/workspace.yaml" \
   --state-root "$KH_PILOT_STATE/registry" \
+  --repository-root "$KH_PILOT_REPO" \
   --allow-real-project
 "$KH_BIN" workspace validate "$KH_PILOT_ID" \
   --state-root "$KH_PILOT_STATE/registry" \
@@ -541,10 +532,11 @@ git -C "$KH_PILOT_REPO" status --short
 
 ## 14. 当前应做什么
 
-在真实项目尚未建立时，不执行第 2 节以后的命令。保留：
+在 Gate G 运行时条件尚未满足时，不执行创建命令。保留：
 
 - `state/fixtures/fixture-vision-project` 作为回归基线；
 - `reports/v3_fixture/` 的验收证据；
-- 本手册作为真实项目出现后的唯一顺序入口。
+- 本手册作为真实项目接入的唯一顺序入口。
 
-真实项目建立后，从第 2 节开始逐 Gate 执行，不跳过 Gate F，也不把 Fixture 配置复制成真实项目配置。
+真实项目建立后，从第 2 节开始逐 Gate 执行；使用
+`configs/projects/real-project-pilot.example.yaml`，不要复制 Fixture 配置。

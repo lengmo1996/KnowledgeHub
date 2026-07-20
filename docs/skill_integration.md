@@ -139,5 +139,7 @@ For V3 project-aware Skills, `knowledge_project_query` is the preferred context 
 `knowledge_project_skill` exposes the bounded read-only workflows `code-debugging`,
 `research-result-analysis`, `research-decision-review`, and `writing-academic`. The server
 operator selects `KH_PROJECT_STATE_ROOT` and `KH_PROJECT_FIXTURE_ROOT`; callers cannot supply
-filesystem roots. Project tools reject unknown fields, preserve Fixture namespace isolation,
-and never execute experiments or cleanup.
+filesystem roots. MCP opens the registry in read-only mode. Fixture Workspaces use the bounded
+offline Fixture Router; real Project Workspaces use `HubQueryService` with their stored
+Literature/Code/Writing filters. Unknown Workspaces, path traversal and namespace crossover fail
+closed, and project tools never execute experiments or cleanup.
