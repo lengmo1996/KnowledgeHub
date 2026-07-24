@@ -46,7 +46,7 @@ def add_v2_parsers(subparsers: Any) -> None:
         "manifest",
         type=Path,
         nargs="?",
-        default=Path("state/releases/v2_0_5_manifest.json"),
+        default=Path("state/releases/v2_0_6_manifest.json"),
     )
     release_validate.add_argument("--repository-root", type=Path, default=Path("."))
 

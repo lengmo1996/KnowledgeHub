@@ -73,9 +73,9 @@ def test_release_manifest_rejects_repository_escape(tmp_path: Path) -> None:
 
 def test_release_cli_is_offline_and_has_safe_defaults() -> None:
     args = build_parser().parse_args(["release", "validate"])
-    assert args.manifest == Path("state/releases/v2_0_5_manifest.json")
+    assert args.manifest == Path("state/releases/v2_0_6_manifest.json")
     assert args.repository_root == Path(".")
 
 
 def test_package_version_marks_current_v2_patch() -> None:
-    assert __version__ == "0.2.5"
+    assert __version__ == "0.2.6"

@@ -1,11 +1,11 @@
 # KnowledgeHub V2 release freeze
 
-KnowledgeHub V2.0.5 is the current frozen patch. The machine-readable source of
-truth is `state/releases/v2_0_5_manifest.json`; it records the pre-freeze
+KnowledgeHub V2.0.6 is the current frozen patch. The machine-readable source of
+truth is `state/releases/v2_0_6_manifest.json`; it records the pre-freeze
 implementation commit, configuration hashes, pinned upstream commits, index
 evidence, interface counts, evaluation gates, dependency/source-diff evidence,
-adaptation audits, multilingual Personal Profile validation, feedback-integrity
-evidence and known limits.
+V3 Workspace and real-project admission boundaries, Writing Materials
+governance, feedback-integrity evidence and known limits.
 The Git commit containing the manifest is the release commit, avoiding a
 self-referential commit hash inside the same file.
 
@@ -20,6 +20,8 @@ V2.0.2 also remains immutable in `state/releases/v2_0_2_manifest.json`.
 V2.0.3 also remains immutable in `state/releases/v2_0_3_manifest.json`.
 
 V2.0.4 also remains immutable in `state/releases/v2_0_4_manifest.json`.
+
+V2.0.5 also remains immutable in `state/releases/v2_0_5_manifest.json`.
 
 ## Deterministic validation
 
@@ -47,12 +49,12 @@ The final read-only check used the configured Qdrant endpoint
 |---|---|---:|---|
 | Literature | `zotero_papers_qwen3_4b_1024_v2` | 190,131 | green |
 | Code | `knowledgehub_code_current` | 1,118 | green |
-| Writing | `knowledgehub_writing_qwen3_4b_1024_v1` | 134 | green |
+| Writing | `knowledgehub_writing_current` | 1,107 | green |
 
-`knowledgehub_code_current` points to the Code collection. The V2 freeze did
-not rebuild, migrate or write the Literature collection. Writing remains the
-134-entry `rules-v1` active index; the `rules-v2` candidate was intentionally
-not published.
+`knowledgehub_code_current` points to the 1,118-point Code collection.
+`knowledgehub_writing_current` points to the previously promoted, validated
+Writing Materials `quality_v2` release. The V2.0.6 freeze did not rebuild,
+promote, roll back or write any collection.
 
 ## Operator checks
 

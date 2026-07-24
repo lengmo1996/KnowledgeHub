@@ -67,7 +67,8 @@ real repository at `state/fixtures` or a formal knowledge-base data directory.
 
 ## V2 release
 
-V2 is frozen as package `0.2.0`. Validate its machine-readable release
+The current V2 patch is frozen as package `0.2.6`. Validate its
+machine-readable release
 manifest and committed configuration hashes without contacting runtime
 services:
 
@@ -75,8 +76,8 @@ services:
 knowledgehub release validate
 ```
 
-The final read-only runtime check observed Literature 190,131 points, Code
-1,106 points and Writing 134 points, all green. See the
+The V2.0.6 read-only runtime check observed Literature 190,131 points, Code
+1,118 points and Writing 1,107 points, all green. See the
 [V2 final report](docs/V2_FINAL_REPORT.md) and
 [release operations guide](docs/v2_release.md) for scope, evidence, known
 limits and optional operator checks.
@@ -150,6 +151,12 @@ V2.0.5 closes the explicit-feedback loop. New feedback accepts only canonical
 unknown entries. `knowledgehub writing-v2 feedback-status` audits malformed and
 orphan historical events without deleting or rewriting them.
 See the [V2.0.5 completion report](docs/V2_PATCH_5_REPORT.md).
+
+V2.0.6 freezes the current controlled-Pilot boundary: V3 project workspaces,
+explicit read-only real-project admission, the production Writing Materials
+governance pipeline and the 17-tool MCP surface. It records the already active
+Writing Materials release without rebuilding or switching an index.
+See the [V2.0.6 release report](docs/V2_PATCH_6_REPORT.md).
 
 ## V2 governance and code intelligence
 

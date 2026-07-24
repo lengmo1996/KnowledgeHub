@@ -1,0 +1,179 @@
+{
+  "schema_name": "knowledgehub_release_manifest",
+  "schema_version": "2.0",
+  "release": "v2.0.6",
+  "package_version": "0.2.6",
+  "base_release": "v2.0.5",
+  "base_release_commit": "114d62c3d441def676647c8708ce094cae739e9d",
+  "frozen_at": "2026-07-24T18:09:36+08:00",
+  "implementation_commit": "4006934e8dd65995897136b63d05071fd5b59bbf",
+  "release_commit_policy": "The release commit is the Git commit containing this manifest; implementation_commit identifies the completed pre-freeze implementation without creating a self-referential hash.",
+  "changes": [
+    "Added isolated V3 project workspaces, experiment fixtures and fail-closed read-only real-project Gate F admission.",
+    "Added the production Writing Materials extraction, review, release, quality, RBAC and retention governance pipeline.",
+    "Published the validated 1,107-point Writing Materials release while retaining explicit alias rollback evidence.",
+    "Expanded the read-only MCP surface to 17 tools, including Workspace-scoped project query and skill workflows.",
+    "Hardened index, release and retention validation while preserving immutable historical release manifests."
+  ],
+  "config_hashes": {
+    "configs/knowledgehub.yaml": "059d40f0caa781a71867c5f8ae060502479f26e5d48cc92c5e05a3299c489f85",
+    "configs/sources/code.yaml": "b963e1e1fa6ed5142bb5b2df7600f4d03752887cc20d4eaae770db7488cf4446",
+    "configs/rag/default.yaml": "6a57d115b1f5a7f1be6c924b733ef2cb562a4b46d0e78bc0614c244d804f9dba",
+    "configs/rag/dual_3090.yaml": "c29195e7c969c30a344dd703e754cafbe140cbfcdca5404df85befac2152ae41",
+    "configs/evaluation/offline.yaml": "e3b1a683d07176dde0e78d2f5df1abab8c61b39d036772011c5ddd139de88a05",
+    "configs/evaluation/v2.yaml": "a8949833e25a996717bd274bb24f92282e34485e152470ec4200b7fa112083b9",
+    "configs/writing_materials.yaml": "f98e34673814511c9d83d2b24b080a4fdc2fbb41f4aa1b655cf32a85aeff5ad6",
+    "configs/writing/taxonomy-v1.yaml": "ffa995cfe61c2bdb9547a49255c21ad6013fc2c527d093311e9568281653dd3c",
+    "configs/writing/prompts/classify-v9.md": "6bc71204d3013b15a1071faa75618a279d5e25fae94693d349d402caa7ca3d12",
+    "configs/writing/prompts/abstract-v7.md": "57e73f1ffe461b123777825802454607d0a931fd91061c6bb9f6c55254f6395b",
+    "configs/projects/real-project-pilot.example.yaml": "c0a534219331f7ad0f76a663eeae7751548909b5dd48e53744ea0a15318021dd",
+    "deploy/systemd/mcp-common.env.example": "f2e075a7f0894b34a54d1e97a9acf0a3ead7d27c70213aecb8d00afeb647bd03"
+  },
+  "embedding": {
+    "model": "Qwen/Qwen3-Embedding-4B",
+    "revision": "5cf2132abc99cad020ac570b19d031efec650f2b",
+    "dimension": 1024,
+    "changed_from_v2_0_5": false
+  },
+  "indexes": {
+    "literature": {
+      "collection": "zotero_papers_qwen3_4b_1024_v2",
+      "points": 190131,
+      "evidence": "Both production MCP listeners reported the Literature collection green and ready; V2.0.6 performed no Literature write."
+    },
+    "code": {
+      "collection": "knowledgehub_code_qwen3_4b_1024_v1",
+      "stable_alias": "knowledgehub_code_current",
+      "points": 1118,
+      "documents": 124,
+      "evidence": "Read-only local artifact and Qdrant membership validation passed with the active alias unchanged."
+    },
+    "writing": {
+      "collection": "knowledgehub_writing_release_20260719_f99463512f16_quality_v2",
+      "stable_alias": "knowledgehub_writing_current",
+      "points": 1107,
+      "documents": 973,
+      "index_schema": "writing-material-release-v1",
+      "artifact_fingerprint": "cceb6d67322488b48d0fd5719073e5cb95968fc5f518d2b27bfa9fe1bb083087",
+      "evidence": "The previously promoted quality_v2 Writing Materials release remained active, green and rollback-labelled; V2.0.6 validation did not switch the alias."
+    }
+  },
+  "runtime_integrity": {
+    "valid": true,
+    "checked_at": "2026-07-24T18:08:00+08:00",
+    "checks": {
+      "sources": 7,
+      "normalized": 124,
+      "dependencies": 5,
+      "writing": 134
+    },
+    "index_checks": {
+      "code_chunks": 1118,
+      "code_qdrant_points": 1118,
+      "writing_artifacts": 973,
+      "writing_qdrant_points": 1107,
+      "literature_qdrant_points": 190131
+    },
+    "services": {
+      "rag_core": "active",
+      "search_api": "active",
+      "mcp_lan": "ready",
+      "mcp_tailscale": "ready"
+    },
+    "errors": 0
+  },
+  "writing_material_release": {
+    "collection": "knowledgehub_writing_release_20260719_f99463512f16_quality_v2",
+    "points": 1107,
+    "artifact_fingerprint": "cceb6d67322488b48d0fd5719073e5cb95968fc5f518d2b27bfa9fe1bb083087",
+    "release_status": "active",
+    "source_validation": "passed",
+    "rbac_and_retention_gates": "passed",
+    "promotion_performed_by_v2_0_6": false
+  },
+  "feedback_integrity": {
+    "schema_version": "2.5",
+    "event_count": 2,
+    "valid_event_count": 1,
+    "valid_labels": {
+      "useful": 1
+    },
+    "malformed_identifier_count": 1,
+    "orphan_identifier_count": 0,
+    "history_mutated_by_audit": false,
+    "invalid_events_affect_ranking": false
+  },
+  "evaluation": {
+    "offline_groups": 11,
+    "live_groups": 11,
+    "samples_per_mode": 66,
+    "failed_groups": 0,
+    "offline_report_sha256": "b56c10f04400edd438ff9b56c5040a50b06e240c95f57c1dbf90d59281d9fce3",
+    "live_report_sha256": "7c4c9a64e92ba133336254887170d87eacdf381292a943990a822bed53afa957",
+    "reports_committed": false,
+    "regression_gates_passed": true
+  },
+  "source_pins": [
+    {
+      "library": "accelerate",
+      "version": "1.14.0",
+      "commit": "beb0672aa8444ea7647aee056f624effe5996346"
+    },
+    {
+      "library": "diffusers",
+      "version": "0.39.0",
+      "commit": "a3608b512ed7248499a44c61d954965ed9bdae4d"
+    },
+    {
+      "library": "lightning",
+      "version": "2.6.5",
+      "commit": "be98784a1a03581b7051a355ae1084fd352d7cea"
+    },
+    {
+      "library": "pytorch",
+      "version": "2.11.0",
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45"
+    },
+    {
+      "library": "transformers",
+      "version": "5.13.0",
+      "commit": "6af945f436d85f2b0c5dff9b14feccd27b1d470b"
+    },
+    {
+      "library": "transformers",
+      "version": "5.13.1",
+      "commit": "4626421dc6b741a329300682a6408246ee465490"
+    },
+    {
+      "library": "transformers",
+      "version": "5.14.0",
+      "commit": "2fa8c195a03938aa148febcc5a696435b4327a47"
+    }
+  ],
+  "interfaces": {
+    "cli_groups": 23,
+    "mcp_tools": 17,
+    "evidence_schema": "query_result@2.0",
+    "real_project_opt_in": "--allow-real-project",
+    "legacy_defaults_preserved": true
+  },
+  "tests": {
+    "passed": 603,
+    "failed": 0,
+    "ruff": "passed",
+    "mypy": "passed",
+    "diff_check": "passed"
+  },
+  "knowledge_bases": [
+    "literature",
+    "code",
+    "writing"
+  ],
+  "known_limits": [
+    "Private real-project operation remains explicit opt-in and requires an independent state root, repository root and Gate G through Gate J runtime checks.",
+    "The release freeze does not create a real Workspace, execute project code, install project dependencies or start the four-week Pilot clock.",
+    "One malformed pre-validation feedback event remains retained for audit and has no ranking effect.",
+    "The two-sample live Writing pattern-retrieval group passed configured gates with function recall at k of 0.5; broader Pilot evidence is still required.",
+    "No scheduler, model training, index rebuild, alias promotion, rollback, cleanup or retention purge was performed by this freeze."
+  ]
+}
