@@ -18,11 +18,15 @@ class HubValidator:
         *,
         rag_dirs: Mapping[str, Path] | None = None,
         code_normalized_root: Path | None = None,
+        active_releases: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self.code_root = code_root
         self.writing_root = writing_root
         self.rag_dirs = dict(rag_dirs or {})
         self.code_normalized_root = code_normalized_root or code_root / "normalized"
+        self.active_releases = {
+            str(name): dict(value) for name, value in (active_releases or {}).items()
+        }
 
     def sources(self) -> dict[str, Any]:
         errors: list[str] = []
@@ -182,6 +186,12 @@ class HubValidator:
             data_dir = self.rag_dirs[knowledge_base]
         except KeyError as exc:
             raise ValueError(f"missing RAG directory for {knowledge_base}") from exc
+        if knowledge_base == "writing" and (data_dir / "writing-material-candidate.json").is_file():
+            return self._writing_material_index(
+                data_dir,
+                qdrant_client=qdrant_client,
+                collection=collection,
+            )
         errors: list[str] = []
         warnings: list[str] = []
         state_path = data_dir / "state" / "index.sqlite3"
@@ -226,6 +236,163 @@ class HubValidator:
                 "artifacts": local["artifacts"],
                 "chunks": len(local["chunk_ids"]),
                 "source_records": len(source_records),
+            },
+            "qdrant": qdrant,
+            "warnings": warnings,
+            "errors": errors[:200],
+        }
+
+    def _writing_material_index(
+        self,
+        data_dir: Path,
+        *,
+        qdrant_client: Any | None,
+        collection: str | None,
+    ) -> dict[str, Any]:
+        """Validate a promoted mixed legacy/material Writing release without writes."""
+        from knowledgehub.writing_rag.release import (
+            verify_writing_material_release_manifest,
+        )
+
+        errors: list[str] = []
+        warnings: list[str] = []
+        release: dict[str, Any] = {}
+        candidate: dict[str, Any] = {}
+        active = self.active_releases.get("writing")
+        if active is None:
+            errors.append("writing-material data requires an active promotion record")
+        else:
+            release_path = Path(str(active.get("release_manifest") or ""))
+            try:
+                release = verify_writing_material_release_manifest(release_path)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                errors.append(f"invalid active writing-material release manifest: {error}")
+            if active.get("rag_data_dir") != str(data_dir):
+                errors.append("active writing-material data directory mismatch")
+            if release and active.get("active_collection") != release.get("candidate_collection"):
+                errors.append("active writing-material collection mismatch")
+            if release and active.get("candidate_points") != release.get(
+                "expected_candidate_points"
+            ):
+                errors.append("active writing-material point count mismatch")
+            if release and active.get("artifact_fingerprint") != release.get(
+                "artifact_fingerprint"
+            ):
+                errors.append("active writing-material fingerprint mismatch")
+
+        candidate_path = data_dir / "writing-material-candidate.json"
+        try:
+            raw_candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_candidate, dict):
+                raise ValueError("candidate manifest must be an object")
+            candidate = dict(raw_candidate)
+            fingerprint = candidate.pop("artifact_fingerprint", None)
+            if fingerprint != sha256_json(candidate):
+                errors.append("writing-material candidate fingerprint is invalid")
+            candidate["artifact_fingerprint"] = fingerprint
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            errors.append(f"invalid writing-material candidate manifest: {error}")
+
+        if candidate:
+            if (
+                candidate.get("schema_name") != "writing_material_candidate"
+                or candidate.get("schema_version") != "writing-material-candidate-v1"
+                or candidate.get("status") != "success"
+                or candidate.get("source_verified") is not True
+                or candidate.get("accepted_only") is not True
+                or candidate.get("dry_run") is not False
+                or candidate.get("promotion_performed") is not False
+                or candidate.get("failures")
+            ):
+                errors.append("writing-material candidate is not a successful immutable build")
+            if candidate.get("candidate_data_dir") != str(data_dir):
+                errors.append("writing-material candidate data directory mismatch")
+        if release and candidate:
+            for field in ("candidate_collection", "accepted_manifest_sha256"):
+                if release.get(field) != candidate.get(field):
+                    errors.append(f"writing-material release/candidate {field} mismatch")
+            if release.get("candidate_data_dir") != str(data_dir):
+                errors.append("writing-material release data directory mismatch")
+            additions = release.get("expected_additions")
+            valid_additions: int | None = None
+            if not isinstance(additions, int) or isinstance(additions, bool) or additions <= 0:
+                errors.append("writing-material release expected_additions is invalid")
+            else:
+                valid_additions = additions
+                if candidate.get("indexed") != valid_additions:
+                    errors.append("writing-material candidate indexed count mismatch")
+            expected_points = release.get("expected_candidate_points")
+            validation = release.get("candidate_validation")
+            if (
+                not isinstance(expected_points, int)
+                or isinstance(expected_points, bool)
+                or valid_additions is None
+                or expected_points <= valid_additions
+            ):
+                errors.append("writing-material release expected_candidate_points is invalid")
+            if (
+                not isinstance(validation, Mapping)
+                or validation.get("status") != "green"
+                or validation.get("points") != expected_points
+            ):
+                errors.append("writing-material release candidate validation mismatch")
+            merge_result = release.get("merge_result")
+            if (
+                not isinstance(merge_result, Mapping)
+                or merge_result.get("status") != "success"
+                or merge_result.get("indexed") != valid_additions
+                or merge_result.get("failures")
+            ):
+                errors.append("writing-material release merge result mismatch")
+
+        rows, tombstones = self._index_state(data_dir / "state" / "index.sqlite3", errors)
+        local = self._chunk_artifacts(
+            "writing",
+            data_dir / "chunks",
+            rows,
+            tombstones,
+            {},
+            errors,
+            writing_material=True,
+        )
+        if candidate and candidate.get("indexed") != len(local["chunk_ids"]):
+            errors.append("writing-material manifest/local chunk count mismatch")
+
+        qdrant = {
+            "checked": False,
+            "collection": collection,
+            "points": None,
+            "status": None,
+        }
+        if qdrant_client is None:
+            warnings.append("qdrant_not_checked")
+        elif not collection:
+            errors.append("Qdrant collection is required for online index validation")
+        else:
+            expected_points = release.get("expected_candidate_points")
+            qdrant = self._qdrant_writing_material_index(
+                qdrant_client,
+                collection,
+                local["chunk_ids"],
+                local["chunk_documents"],
+                local["chunk_metadata"],
+                expected_points,
+                errors,
+            )
+        active_documents = sum(bool(row.get("active")) for row in rows.values())
+        return {
+            "check": "index",
+            "knowledge_base": "writing",
+            "index_schema": "writing-material-release-v1",
+            "valid": not errors,
+            "checked": {
+                "state_documents": len(rows),
+                "active_documents": active_documents,
+                "tombstones": len(tombstones),
+                "artifacts": local["artifacts"],
+                "chunks": len(local["chunk_ids"]),
+                "source_records": 0,
+                "release_points": release.get("expected_candidate_points"),
             },
             "qdrant": qdrant,
             "warnings": warnings,
@@ -401,10 +568,17 @@ class HubValidator:
         tombstones: set[str],
         source_records: Mapping[str, Mapping[str, Any]],
         errors: list[str],
+        *,
+        writing_material: bool = False,
     ) -> dict[str, Any]:
         if not root.is_dir():
             errors.append(f"missing chunk artifact directory: {root}")
-            return {"artifacts": 0, "chunk_ids": set(), "chunk_documents": {}}
+            return {
+                "artifacts": 0,
+                "chunk_ids": set(),
+                "chunk_documents": {},
+                "chunk_metadata": {},
+            }
         expected_names = {
             f"{sha256_json(document_id)[:32]}.jsonl": document_id for document_id in rows
         }
@@ -413,6 +587,7 @@ class HubValidator:
                 errors.append(f"unreferenced chunk artifact: {artifact}")
         chunk_ids: set[str] = set()
         chunk_documents: dict[str, str] = {}
+        chunk_metadata: dict[str, Mapping[str, Any]] = {}
         artifact_count = 0
         for document_id, row in rows.items():
             if not bool(row.get("active")):
@@ -438,6 +613,8 @@ class HubValidator:
                 else:
                     chunk_ids.add(chunk_id)
                     chunk_documents[chunk_id] = chunk_document
+                    if isinstance(metadata, Mapping):
+                        chunk_metadata[chunk_id] = metadata
                 if chunk_document != document_id:
                     errors.append(f"{artifact}:{line_number} document_id mismatch")
                 index = value.get("chunk_index")
@@ -458,6 +635,7 @@ class HubValidator:
                     artifact,
                     line_number,
                     errors,
+                    writing_material=writing_material,
                 )
             if sorted(indexes) != list(range(len(values))):
                 errors.append(f"non-contiguous chunk indexes for {document_id}")
@@ -468,22 +646,25 @@ class HubValidator:
                 source_records.get(document_id),
                 values,
                 errors,
+                writing_material=writing_material,
             )
-        active_without_source = {
-            document_id
-            for document_id, row in rows.items()
-            if bool(row.get("active")) and document_id not in source_records
-        }
-        errors.extend(
-            f"active index document has no source record: {value}"
-            for value in sorted(active_without_source)
-        )
+        if not writing_material:
+            active_without_source = {
+                document_id
+                for document_id, row in rows.items()
+                if bool(row.get("active")) and document_id not in source_records
+            }
+            errors.extend(
+                f"active index document has no source record: {value}"
+                for value in sorted(active_without_source)
+            )
         if tombstones - set(rows):
             errors.append("index contains orphan tombstones")
         return {
             "artifacts": artifact_count,
             "chunk_ids": chunk_ids,
             "chunk_documents": chunk_documents,
+            "chunk_metadata": chunk_metadata,
         }
 
     @staticmethod
@@ -517,12 +698,27 @@ class HubValidator:
         path: Path,
         line_number: int,
         errors: list[str],
+        *,
+        writing_material: bool = False,
     ) -> None:
         if not isinstance(metadata, Mapping):
             errors.append(f"{path}:{line_number} metadata must be an object")
             return
-        if metadata.get("knowledge_base") != knowledge_base:
+        if not writing_material and metadata.get("knowledge_base") != knowledge_base:
             errors.append(f"{path}:{line_number} knowledge_base mismatch")
+        if writing_material:
+            asset_type = metadata.get("asset_type")
+            if asset_type not in {"strategy", "template", "phrase"}:
+                errors.append(f"{path}:{line_number} invalid metadata.asset_type")
+            elif not document_id.startswith(f"{asset_type}:"):
+                errors.append(f"{path}:{line_number} asset identity/type mismatch")
+            for field in ("category", "evidence_ids", "provenance", "quality_score"):
+                value = metadata.get(field)
+                if value is None or value == "" or value == []:
+                    errors.append(f"{path}:{line_number} missing metadata.{field}")
+            if metadata.get("accepted_snapshot_only") is not True:
+                errors.append(f"{path}:{line_number} material is not accepted-snapshot-only")
+            return
         required = (
             ("library", "version", "source_type", "source_url", "commit")
             if knowledge_base == "code"
@@ -546,10 +742,14 @@ class HubValidator:
         source: Mapping[str, Any] | None,
         chunks: list[tuple[int, dict[str, Any]]],
         errors: list[str],
+        *,
+        writing_material: bool = False,
     ) -> None:
-        if source is None:
+        if source is None and not writing_material:
             return
         if knowledge_base == "code":
+            if source is None:
+                return
             if row.get("content_hash") != source.get("content_hash"):
                 errors.append(f"state content_hash differs from normalized source: {document_id}")
             metadata = source.get("metadata")
@@ -565,6 +765,84 @@ class HubValidator:
             errors.append(f"state content_hash differs from Writing artifact: {document_id}")
         if not isinstance(metadata, Mapping) or row.get("metadata_hash") != sha256_json(metadata):
             errors.append(f"state metadata_hash differs from Writing artifact: {document_id}")
+
+    @staticmethod
+    def _qdrant_writing_material_index(
+        client: Any,
+        collection: str,
+        local_chunk_ids: set[str],
+        local_documents: Mapping[str, str],
+        local_metadata: Mapping[str, Mapping[str, Any]],
+        expected_points: object,
+        errors: list[str],
+    ) -> dict[str, Any]:
+        try:
+            info = client.get_collection(collection)
+            status = str(getattr(info.status, "value", info.status))
+            points = int(info.points_count or 0)
+            exact_points = int(client.count(collection_name=collection, exact=True).count)
+        except Exception as error:
+            errors.append(f"cannot inspect Qdrant collection {collection}: {error}")
+            return {
+                "checked": True,
+                "collection": collection,
+                "points": None,
+                "status": "unavailable",
+            }
+        if status != "green":
+            errors.append(f"Qdrant collection is not green: {collection} ({status})")
+        if points != exact_points:
+            errors.append(
+                f"Qdrant reported point counts disagree: {points} info vs {exact_points} exact"
+            )
+        if (
+            not isinstance(expected_points, int)
+            or isinstance(expected_points, bool)
+            or exact_points != expected_points
+        ):
+            errors.append(
+                f"Qdrant/release point count mismatch: {exact_points} vs {expected_points}"
+            )
+        remote_ids: set[str] = set()
+        offset: Any = None
+        try:
+            while True:
+                page, offset = client.scroll(
+                    collection_name=collection,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                for point in page:
+                    point_id = str(point.id)
+                    remote_ids.add(point_id)
+                    if point_id not in local_chunk_ids:
+                        continue
+                    payload = point.payload or {}
+                    if payload.get("chunk_id") != point_id:
+                        errors.append(f"Qdrant point/chunk_id mismatch: {point_id}")
+                    if payload.get("document_id") != local_documents.get(point_id):
+                        errors.append(f"Qdrant document_id mismatch: {point_id}")
+                    expected_metadata = local_metadata.get(point_id, {})
+                    if any(
+                        payload.get(str(key)) != value for key, value in expected_metadata.items()
+                    ):
+                        errors.append(f"Qdrant writing-material metadata mismatch: {point_id}")
+                if offset is None:
+                    break
+        except Exception as error:
+            errors.append(f"cannot scroll Qdrant collection {collection}: {error}")
+        errors.extend(
+            f"Qdrant missing writing-material chunk: {value}"
+            for value in sorted(local_chunk_ids - remote_ids)
+        )
+        return {
+            "checked": True,
+            "collection": collection,
+            "points": exact_points,
+            "status": status,
+        }
 
     @staticmethod
     def _qdrant_index(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -464,6 +465,9 @@ def run_v2_command(args: argparse.Namespace) -> int:
         store.release(args.lock_key, force=args.force)
         return _emit({"status": "unlocked", "lock_key": args.lock_key})
     if args.source == "validate":
+        from knowledgehub.governance.snapshots import active_release_metadata
+
+        index_root = Path(os.environ.get("KH_INDEX_ROOT", "/data/KnowledgeHub/indexes"))
         validator = HubValidator(
             config.code.data_root,
             config.writing.data_root,
@@ -472,6 +476,11 @@ def run_v2_command(args: argparse.Namespace) -> int:
                 "writing": config.rag_config("writing").data_dir,
             },
             code_normalized_root=config.normalized_root("code"),
+            active_releases={
+                name: release
+                for name in ("code", "writing")
+                if (release := active_release_metadata(index_root, name)) is not None
+            },
         )
         if args.target == "index" and args.knowledge_base is None:
             return _emit_error("knowledge_base is required for index validation")

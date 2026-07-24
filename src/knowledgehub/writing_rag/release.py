@@ -17,6 +17,26 @@ _COLLECTION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _SNAPSHOT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,255}\Z")
 
 
+def verify_writing_material_release_manifest(path: Path) -> dict[str, Any]:
+    """Read and authenticate one immutable, promotion-eligible release manifest."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("release manifest must be an object")
+    manifest = dict(raw)
+    if (
+        manifest.get("schema_name") != "writing_material_release"
+        or manifest.get("schema_version") != RELEASE_SCHEMA_VERSION
+        or manifest.get("status") != "validated"
+        or not manifest.get("promotion_eligible")
+    ):
+        raise ValueError("release manifest is not validated and promotion eligible")
+    fingerprint = manifest.pop("artifact_fingerprint", None)
+    if fingerprint != sha256_json(manifest):
+        raise ValueError("release manifest fingerprint is invalid")
+    manifest["artifact_fingerprint"] = fingerprint
+    return manifest
+
+
 class ReleaseBackend(Protocol):
     def inspect(self, collection: str) -> Mapping[str, Any]: ...
 
@@ -418,21 +438,7 @@ class WritingMaterialReleaseService:
             raise ValueError(f"{label} collection is not green or has an invalid schema")
 
     def _verified_manifest(self, path: Path) -> dict[str, Any]:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            raise ValueError("release manifest must be an object")
-        manifest: dict[str, Any] = raw
-        if (
-            manifest.get("schema_version") != RELEASE_SCHEMA_VERSION
-            or manifest.get("status") != "validated"
-            or not manifest.get("promotion_eligible")
-        ):
-            raise ValueError("release manifest is not validated and promotion eligible")
-        fingerprint = manifest.pop("artifact_fingerprint", None)
-        if fingerprint != sha256_json(manifest):
-            raise ValueError("release manifest fingerprint is invalid")
-        manifest["artifact_fingerprint"] = fingerprint
-        return manifest
+        return verify_writing_material_release_manifest(path)
 
 
 def _model_value(value: Any) -> Any:

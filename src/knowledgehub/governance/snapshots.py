@@ -39,6 +39,20 @@ def active_release_data_dir(root: Path, knowledge_base: str, fallback: Path) -> 
     return Path(str(selected)) if selected and Path(str(selected)).is_dir() else fallback
 
 
+def active_release_metadata(root: Path, knowledge_base: str) -> dict[str, Any] | None:
+    """Return a copy of the active promotion record without trusting its paths."""
+    path = root / knowledge_base / "aliases" / "current.json"
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("status") != "active":
+        return None
+    return dict(value)
+
+
 def active_release_normalized_root(
     root: Path,
     knowledge_base: str,
